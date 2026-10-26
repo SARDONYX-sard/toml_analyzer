@@ -89,7 +89,54 @@ function tag(args) {
   console.log(`pushed ${name}`);
 }
 
+/**
+ * Renders resources/icon.svg into resources/icon.png (256x256, transparent
+ * corners) with a headless Edge or Chrome: no image tool to install.
+ */
+function icon(args) {
+  const size = Number(option(args, "--size") ?? 256);
+  const candidates = [
+    option(args, "--browser"),
+    process.env.BROWSER,
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  ].filter(Boolean);
+  const browser = candidates.find((b) => fs.existsSync(b));
+  if (!browser) throw new Error("no Edge or Chrome found: pass --browser <path>");
+  const svg = fs.readFileSync(path.join(__dirname, "resources", "icon.svg"), "utf8");
+  const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "toml-icon-"));
+  const html = path.join(dir, "icon.html");
+  fs.writeFileSync(
+    html,
+    `<!doctype html><html><body style="margin:0;background:transparent">` +
+      svg.replace(/width="\d+" height="\d+"/, `width="${size}" height="${size}"`) +
+      `</body></html>`,
+  );
+  const out = path.join(__dirname, "resources", "icon.png");
+  execFileSync(browser, [
+    "--headless",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    "--default-background-color=00000000",
+    `--window-size=${size},${size}`,
+    `--screenshot=${out}`,
+    `file:///${html.replace(/\\/g, "/")}`,
+  ]);
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log(`rendered ${out}`);
+}
+
 const TASKS = {
+  icon: {
+    usage: "[--size <px>] [--browser <path>]",
+    help: `Renders resources/icon.svg into resources/icon.png with a headless Edge or Chrome.
+  --size     the size in pixels (default: 256)
+  --browser  the browser executable (default: Edge or Chrome where installed)`,
+    run: icon,
+  },
   build: {
     usage: "[--vsix] [--target <rust triple>] [--profile <name>] [--binary <path>]",
     help: `Copies the server next to the extension in build/.

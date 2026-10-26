@@ -19,6 +19,20 @@ use crate::{
     parser::Parser,
 };
 
+/// The document: the entries before the first header, then the tables.
+///
+/// ```text
+/// root = entries (table | array_table)*
+/// ```
+///
+/// ```toml
+/// title = "x"      # entries
+/// [package]        # table
+/// [[bin]]          # array_table
+/// ```
+///
+/// Produces `ROOT`. Never fails: whatever cannot be parsed ends up in
+/// `ERROR` nodes.
 pub(crate) fn root(p: &mut Parser<'_>) {
     let m = p.open();
     entries(p);
@@ -33,7 +47,16 @@ pub(crate) fn root(p: &mut Parser<'_>) {
     p.close(m, ROOT);
 }
 
-/// Entries up to the next table header.
+/// The entries of a table section, up to the next header or the end of the
+/// input. Blank lines are skipped.
+///
+/// ```text
+/// entries = (entry eol | NEWLINE)*
+/// ```
+///
+/// Produces no node of its own: the entries are children of the `ROOT` or
+/// `TABLE`. A line starting with anything else than a key is wrapped in an
+/// `ERROR` node.
 fn entries(p: &mut Parser<'_>) {
     loop {
         match p.current() {
@@ -48,6 +71,21 @@ fn entries(p: &mut Parser<'_>) {
     }
 }
 
+/// A `[table]` or `[[array.of.tables]]` header and its entries.
+///
+/// ```text
+/// table       = "[" key "]" eol entries
+/// array_table = "[[" key "]]" eol entries
+/// ```
+///
+/// ```toml
+/// [dependencies.serde]
+/// version = "1"
+/// ```
+///
+/// Produces `TABLE` (or `ARRAY_TABLE`) holding a `TABLE_HEADER` (or
+/// `ARRAY_TABLE_HEADER`) and the entries. A mismatched bracket (`[[a]`,
+/// `[a]]`) is reported and consumed; a missing one is reported only.
 fn table(p: &mut Parser<'_>) {
     let m = p.open();
     let array = p.at(L_BRACK2);
@@ -78,6 +116,19 @@ fn table(p: &mut Parser<'_>) {
     p.close(m, if array { ARRAY_TABLE } else { TABLE });
 }
 
+/// A key/value pair.
+///
+/// ```text
+/// entry = key "=" value
+/// ```
+///
+/// ```toml
+/// a."b c".d = 1
+/// ```
+///
+/// Produces `ENTRY` holding a `KEY`, the `=` token and the value. A missing
+/// `=` is reported, and the value is still parsed when one follows
+/// (`a 1`); a missing value is reported after the `=`.
 fn entry(p: &mut Parser<'_>) {
     let m = p.open();
     key(p);
@@ -87,6 +138,14 @@ fn entry(p: &mut Parser<'_>) {
     p.close(m, ENTRY);
 }
 
+/// A dotted key.
+///
+/// ```text
+/// key = segment ("." segment)*
+/// ```
+///
+/// Produces `KEY` holding the segment tokens and the dots. A trailing `.`
+/// is reported.
 fn key(p: &mut Parser<'_>) {
     let m = p.open();
     segment(p);
@@ -101,6 +160,15 @@ fn key(p: &mut Parser<'_>) {
     p.close(m, KEY);
 }
 
+/// A part of a key.
+///
+/// ```text
+/// segment = BARE_KEY | BASIC_STRING | LITERAL_STRING
+/// ```
+///
+/// A single token. An invalid bare key (`UNKNOWN`, reported by the lexer)
+/// is accepted as a segment; a multi-line string is wrapped in an `ERROR`
+/// node.
 fn segment(p: &mut Parser<'_>) {
     match p.current() {
         // UNKNOWN: an invalid bare key, already reported by the lexer.
@@ -112,6 +180,15 @@ fn segment(p: &mut Parser<'_>) {
     }
 }
 
+/// A value.
+///
+/// ```text
+/// value  = scalar | array | inline_table
+/// scalar = STRING | INTEGER | FLOAT | BOOL | DATE_TIME
+/// ```
+///
+/// A scalar is a single token in the `ENTRY` or `ARRAY`. An unquoted word
+/// (`UNKNOWN`, reported by the lexer) is accepted as a value.
 fn value(p: &mut Parser<'_>) {
     match p.current() {
         k if k.is_scalar() => p.advance(),
@@ -123,6 +200,22 @@ fn value(p: &mut Parser<'_>) {
     }
 }
 
+/// An array, which may span lines and end with a comma.
+///
+/// ```text
+/// array = "[" NEWLINE* (value NEWLINE* ("," NEWLINE* value NEWLINE*)* ","?)? NEWLINE* "]"
+/// ```
+///
+/// ```toml
+/// a = [
+///   1, # comment
+///   2,
+/// ]
+/// ```
+///
+/// Produces `ARRAY`. A missing `,` between values is reported and the next
+/// value parsed. An unclosed array stops before a line looking like
+/// `key = ...`, see [`looks_like_entry`].
 fn array(p: &mut Parser<'_>) {
     let m = p.open();
     p.advance();
@@ -156,6 +249,18 @@ fn array(p: &mut Parser<'_>) {
     p.close(m, ARRAY);
 }
 
+/// An inline table. TOML 1.1 allows newlines and a trailing comma.
+///
+/// ```text
+/// inline_table = "{" NEWLINE* (entry NEWLINE* ("," NEWLINE* entry NEWLINE*)* ","?)? NEWLINE* "}"
+/// ```
+///
+/// ```toml
+/// serde = { version = "1", features = ["derive"] }
+/// ```
+///
+/// Produces `INLINE_TABLE` holding `ENTRY` nodes. A missing `,` between
+/// entries is reported and the next entry parsed.
 fn inline_table(p: &mut Parser<'_>) {
     let m = p.open();
     p.advance();
@@ -186,7 +291,14 @@ fn inline_table(p: &mut Parser<'_>) {
     p.close(m, INLINE_TABLE);
 }
 
-/// The end of an entry or a header: a newline or the end of the input.
+/// The end of an entry or a header.
+///
+/// ```text
+/// eol = NEWLINE | EOF
+/// ```
+///
+/// Anything else up to the line break is reported and wrapped in an
+/// `ERROR` node (`a = 1 b = 2`).
 fn eol(p: &mut Parser<'_>) {
     // An unclosed array may have taken the newline already.
     if p.eat(NEWLINE) || p.eof() || p.prev() == NEWLINE {

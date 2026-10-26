@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- The extension icon: a TOML document (a [table] header and key = value
+       lines) under a magnifying glass with a check: validated by a schema.
+       resources/icon.png is rendered from this file (256x256), see
+       `node tasks.cjs icon`. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3445"/>
+      <stop offset="1" stop-color="#161b25"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f4f6fa"/>
+      <stop offset="1" stop-color="#d5dbe5"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="256" height="256" rx="48" fill="url(#bg)"/>
+
+  <!-- The sheet, its corner folded. -->
+  <path d="M60 34h92l34 34v142a10 10 0 0 1-10 10H60a10 10 0 0 1-10-10V44a10 10 0 0 1 10-10z" fill="url(#paper)"/>
+  <path d="M152 34v26a8 8 0 0 0 8 8h26z" fill="#aab4c4"/>
+
+  <!-- [table] -->
+  <g fill="none" stroke="#e8743b" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M80 80h-8v32h8"/>
+    <path d="M138 80h8v32h-8"/>
+  </g>
+  <path d="M90 96h38" stroke="#b5532a" stroke-width="10" stroke-linecap="round"/>
+
+  <!-- key = value -->
+  <g stroke-linecap="round" stroke-width="9">
+    <path d="M72 138h30" stroke="#3d6fb6"/>
+    <path d="M114 134h10M114 142h10" stroke="#7a8597" stroke-width="5"/>
+    <path d="M136 138h26" stroke="#2f8f6d"/>
+    <path d="M72 166h22" stroke="#3d6fb6"/>
+    <path d="M106 162h10M106 170h10" stroke="#7a8597" stroke-width="5"/>
+    <path d="M128 166h14" stroke="#8a4fbf"/>
+    <path d="M72 194h34" stroke="#3d6fb6"/>
+  </g>
+
+  <!-- Magnifying glass. -->
+  <g>
+    <path d="M202 202l26 26" stroke="#e8edf5" stroke-width="16" stroke-linecap="round"/>
+    <circle cx="176" cy="176" r="36" fill="#9fd4ff" fill-opacity="0.28" stroke="#e8edf5" stroke-width="10"/>
+    <path d="M160 176l11 11 21-23" fill="none" stroke="#5be08a" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

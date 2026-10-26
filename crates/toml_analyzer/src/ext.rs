@@ -32,6 +32,37 @@ pub(crate) struct DocumentSchemaResult {
     pub(crate) source: Option<String>,
     /// `ready`, `loading` or `failed: ...`.
     pub(crate) status: String,
+    /// For `settings`: the URL of the `toml.schemas` association, as
+    /// written (`none` for no schema), and its pattern matching the file.
+    pub(crate) association_url: Option<String>,
+    pub(crate) pattern: Option<String>,
+}
+
+/// `toml/schemaCatalog`: the schemas of the SchemaStore catalog, to choose
+/// one. `loading` while the catalog is fetched: ask again.
+pub(crate) enum SchemaCatalog {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SchemaCatalogResult {
+    pub(crate) loading: bool,
+    pub(crate) schemas: Vec<CatalogSchema>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CatalogSchema {
+    pub(crate) name: String,
+    pub(crate) url: String,
+    pub(crate) description: Option<String>,
+    /// The schema applies to some TOML files.
+    pub(crate) toml: bool,
+}
+
+impl Request for SchemaCatalog {
+    type Params = ();
+    type Result = SchemaCatalogResult;
+    const METHOD: &'static str = "toml/schemaCatalog";
 }
 
 impl Request for DocumentSchema {

@@ -15,6 +15,10 @@ export interface DocumentSchemaResult {
   source?: string;
   /** `none`, `ready`, `loading` or `failed: ...`. */
   status: string;
+  /** For `settings`: the key of `toml.schemas` that applies (`none`: no schema). */
+  associationUrl?: string;
+  /** For `settings`: its pattern matching the file. */
+  pattern?: string;
 }
 
 /** `toml/documentSchema`: the schema of a document. */
@@ -32,3 +36,16 @@ export interface StatusResult {
 
 /** `toml/status`: what the server knows. */
 export const StatusRequest = new RequestType0<StatusResult, void>("toml/status");
+
+export interface CatalogSchema {
+  name: string;
+  url: string;
+  description?: string;
+  /** The schema applies to some TOML files. */
+  toml: boolean;
+}
+
+/** `toml/schemaCatalog`: the SchemaStore catalog; `loading` while it is fetched. */
+export const SchemaCatalogRequest = new RequestType0<{ loading: boolean; schemas: CatalogSchema[] }, void>(
+  "toml/schemaCatalog",
+);

@@ -85,6 +85,7 @@ impl Builder {
             message,
             range,
             related: related.map(|(r, m)| (r, m.to_owned())),
+            removable: false,
         });
     }
 
@@ -251,6 +252,9 @@ impl Builder {
             path.push(PathSegment::Key(name.clone()));
             let message = format!("the key `{}` is defined twice", display_path(&path));
             self.error(*range, message, Some((previous.key_range, "first defined here")));
+            if let Some(e) = self.errors.last_mut() {
+                e.removable = true;
+            }
             return;
         }
         table.insert(name.clone(), *range, item);

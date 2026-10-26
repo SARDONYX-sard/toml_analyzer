@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- .toml: a [table] header over key = value lines. -->
+  <g fill="none" stroke="#e8743b" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 2.5H2.5v5H4"/>
+    <path d="M12 2.5h1.5v5H12"/>
+  </g>
+  <path d="M5.5 5h5" stroke="#b5532a" stroke-width="1.6" stroke-linecap="round"/>
+  <g stroke-linecap="round" stroke-width="1.5">
+    <path d="M2.5 10.5h4" stroke="#5b8fd6"/>
+    <path d="M9 10.5h4.5" stroke="#3fa77e"/>
+    <path d="M2.5 13.5h3" stroke="#5b8fd6"/>
+    <path d="M8 13.5h3" stroke="#a46ad6"/>
+  </g>
+</svg>

@@ -75,10 +75,13 @@ pub(crate) enum Fetched {
     Catalog { generation: u64, result: Result<Vec<CatalogEntry>, String> },
 }
 
-/// A schema of the SchemaStore catalog that applies to TOML files.
+/// A schema of the SchemaStore catalog.
 pub(crate) struct CatalogEntry {
-    url: String,
-    globs: GlobSet,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) url: String,
+    /// The TOML files it applies to, if any.
+    globs: Option<GlobSet>,
 }
 
 enum Catalog {
@@ -210,7 +213,11 @@ impl Schemas {
                 }
                 self.catalog = match result {
                     Ok(entries) => {
-                        log::info!("SchemaStore catalog: {} schemas for TOML files", entries.len());
+                        log::info!(
+                            "SchemaStore catalog: {} schemas, {} for TOML files",
+                            entries.len(),
+                            entries.iter().filter(|e| e.globs.is_some()).count()
+                        );
                         Catalog::Loaded(entries)
                     }
                     Err(e) => {
@@ -307,6 +314,25 @@ impl Schemas {
         out
     }
 
+    /// The schemas of the catalog, for choosing one: those of TOML files
+    /// first. `None` while the catalog is fetched.
+    pub(crate) fn catalog_list(&mut self) -> Option<Vec<(&CatalogEntry, bool)>> {
+        if matches!(self.catalog, Catalog::NotLoaded) {
+            // Starts fetching it.
+            let _ = self.catalog_match(Path::new(""));
+        }
+        match &self.catalog {
+            Catalog::Loaded(entries) => {
+                let mut list: Vec<(&CatalogEntry, bool)> =
+                    entries.iter().map(|e| (e, e.globs.is_some())).collect();
+                list.sort_by_key(|(_, toml)| !toml);
+                Some(list)
+            }
+            Catalog::Failed => Some(Vec::new()),
+            Catalog::NotLoaded | Catalog::Loading => None,
+        }
+    }
+
     /// The schema of the SchemaStore catalog for `path`.
     pub(crate) fn catalog_match(&mut self, path: &Path) -> CatalogMatch {
         match &self.catalog {
@@ -332,7 +358,7 @@ impl Schemas {
                 let path = slash_path(path);
                 entries
                     .iter()
-                    .find(|e| e.globs.is_match(&path))
+                    .find(|e| e.globs.as_ref().is_some_and(|g| g.is_match(&path)))
                     .map_or(CatalogMatch::None, |e| CatalogMatch::Found(e.url.clone()))
             }
         }
@@ -350,27 +376,43 @@ pub(crate) fn slash_path(path: &Path) -> String {
 }
 
 /// Builds the patterns of an association. A pattern without `/` matches
-/// file names in any directory.
-pub(crate) fn glob_set(patterns: &[String]) -> Option<GlobSet> {
+/// file names in any directory; a relative one with `/` is relative to
+/// `root` (the workspace folder). Returns the set and the patterns it holds,
+/// as written, in order.
+pub(crate) fn glob_set(patterns: &[String], root: Option<&Path>) -> Option<(GlobSet, Vec<String>)> {
     let mut builder = GlobSetBuilder::new();
-    let mut any = false;
-    for p in patterns {
-        let p = p.replace('\\', "/");
-        let p = if p.contains('/') { p } else { format!("**/{p}") };
+    let mut kept = Vec::new();
+    for written in patterns {
+        let p = written.replace('\\', "/");
+        let absolute =
+            p.starts_with('/') || p.starts_with("**") || p.as_bytes().get(1) == Some(&b':');
+        let p = match root {
+            _ if !p.contains('/') => format!("**/{p}"),
+            Some(root) if !absolute => {
+                format!("{}/{}", slash_path(root).trim_end_matches('/'), p.trim_start_matches("./"))
+            }
+            _ => p,
+        };
         match GlobBuilder::new(&p).case_insensitive(cfg!(windows)).literal_separator(false).build()
         {
             Ok(glob) => {
                 builder.add(glob);
-                any = true;
+                kept.push(written.clone());
             }
             Err(e) => log::warn!("invalid file pattern `{p}`: {e}"),
         }
     }
-    any.then(|| builder.build().ok()).flatten()
+    if kept.is_empty() {
+        return None;
+    }
+    builder.build().ok().map(|set| (set, kept))
 }
-
 fn fetch_schema(url: &str, settings: &FetchSettings) -> Result<(Value, Option<FileStamp>), String> {
     let parsed = Url::parse(url).map_err(|e| format!("invalid schema URL `{url}`: {e}"))?;
+    if parsed.scheme() == crate::clippy::SCHEME {
+        let schema = crate::clippy::fetch(&parsed, |u| http_get_cached(u, settings))?;
+        return Ok((schema, None));
+    }
     let (text, stamp) = match parsed.scheme() {
         "file" => {
             let path =
@@ -400,18 +442,19 @@ fn fetch_catalog(settings: &FetchSettings) -> Result<Vec<CatalogEntry>, String> 
         .iter()
         .filter_map(|s| {
             let url = s.get("url")?.as_str()?.to_owned();
+            let name = s.get("name").and_then(Value::as_str).unwrap_or(&url).to_owned();
+            let description = s.get("description").and_then(Value::as_str).map(str::to_owned);
             let patterns: Vec<String> = s
-                .get("fileMatch")?
-                .as_array()?
-                .iter()
+                .get("fileMatch")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
                 .filter_map(Value::as_str)
                 .filter(|p| p.to_ascii_lowercase().ends_with(".toml"))
                 .map(str::to_owned)
                 .collect();
-            if patterns.is_empty() {
-                return None;
-            }
-            Some(CatalogEntry { url, globs: glob_set(&patterns)? })
+            let globs = glob_set(&patterns, None).map(|(set, _)| set);
+            Some(CatalogEntry { name, description, url, globs })
         })
         .collect())
 }

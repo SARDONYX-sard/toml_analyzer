@@ -132,9 +132,34 @@ fn lookup() {
             .into_iter()
             .map(|k| (k.key, k.required))
             .collect();
-    assert_eq!(keys, [("edition".to_owned(), false), ("name".to_owned(), true)]);
+    assert_eq!(keys, [("name".to_owned(), true), ("edition".to_owned(), false)]);
     let info = SchemaInfo::of(&schemas_at(&registry, &root, &path(&["bin", "0", "name"])));
     assert_eq!(info.description.as_deref(), Some("The binary."));
     let info = SchemaInfo::of(&schemas_at(&registry, &root, &path(&["package", "edition"])));
     assert_eq!(info.values, [json!("2021"), json!("2024")]);
+}
+
+#[test]
+fn deprecation() {
+    let schema = json!({"properties": {
+        "authors": {"deprecated": true, "description": "The authors.\n\nShown on crates.io."},
+        "old": {"deprecated": true, "description": "An old key. Deprecated: renamed to `new-key`."},
+        "legacy": {"deprecated": true, "deprecationMessage": "Use 'modern' instead."},
+    }});
+    let mut registry = Registry::new();
+    registry.insert(URL, schema);
+    let dom = Dom::build(&toml_parser::parse("authors = []\nold = 1\nlegacy = 1\n"));
+    let root = registry.root(URL).unwrap();
+    let found: Vec<String> = validate(&registry, &root, &dom.root, &[])
+        .into_iter()
+        .map(|e| format!("{}: {:?}", e.message, e.suggestions))
+        .collect();
+    expect![[r#"
+        [
+            "`authors` is deprecated: [RemoveKey]",
+            "`old` is deprecated: renamed to `new-key`.: [RenameKey(\"new-key\"), RemoveKey]",
+            "`legacy` is deprecated: Use 'modern' instead.: [RenameKey(\"modern\"), RemoveKey]",
+        ]
+    "#]]
+    .assert_debug_eq(&found);
 }

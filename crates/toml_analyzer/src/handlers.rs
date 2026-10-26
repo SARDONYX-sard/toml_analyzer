@@ -1,7 +1,5 @@
 //! Request handlers.
 
-use std::str::FromStr;
-
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionItemTag, CompletionParams, CompletionResponse,
     DocumentLink, DocumentLinkParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
@@ -29,15 +27,28 @@ impl Server {
     pub(crate) fn hover(&mut self, params: HoverParams) -> Option<Hover> {
         let p = params.text_document_position_params;
         let url = self.ready_schema(&p.text_document.uri);
+        let cargo =
+            self.config.cargo && self.doc(&p.text_document.uri).is_ok_and(is_cargo_manifest);
         let doc = &self.doc(&p.text_document.uri).ok()?.doc;
+        let offset = conv::offset(doc, p.position);
         let schema = url.as_deref().map(|url| Schema { registry: &self.schemas.registry, url });
-        let hover = toml_ide::hover(doc, conv::offset(doc, p.position), schema)?;
+        let from_schema = toml_ide::hover(doc, offset, schema);
+        let dependency = cargo.then(|| toml_ide::cargo_hover_context(doc, offset)).flatten();
+        let (markdown, range) = match (dependency, from_schema) {
+            (Some(dep), Some(h)) => (
+                format!("{}\n\n---\n\n{}", toml_ide::cargo_hover_markdown(&dep), h.markdown),
+                dep.range,
+            ),
+            (Some(dep), None) => (toml_ide::cargo_hover_markdown(&dep), dep.range),
+            (None, Some(h)) => (h.markdown, h.range),
+            (None, None) => return None,
+        };
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value: hover.markdown,
+                value: markdown,
             }),
-            range: Some(conv::range(doc, hover.range)),
+            range: Some(conv::range(doc, range)),
         })
     }
 
@@ -52,11 +63,18 @@ impl Server {
         let cargo = self.config.cargo && self.doc(uri).is_ok_and(is_cargo_manifest);
         let context = if cargo {
             let doc = &self.doc(uri).ok()?.doc;
-            toml_ide::cargo_context(doc, conv::offset(doc, p.position))
+            toml_ide::cargo_context(doc, conv::offset(doc, p.position)).filter(|c| {
+                // Registry versions: other extensions (crates, Dependi) complete
+                // them too. Local versions come from the local manifest.
+                self.config.cargo_versions
+                    || c.local_path.is_some()
+                    || !matches!(c.target, toml_ide::CargoTarget::Version { .. })
+            })
         } else {
             None
         };
         let answer = match &context {
+            Some(c) if c.local_path.is_some() => Some(self.local_crate_answer(uri, c)),
             Some(c) => Some(self.crates.get(&c.query)?),
             None => None,
         };
@@ -200,14 +218,33 @@ impl Server {
         &mut self,
         params: DocumentLinkParams,
     ) -> Option<Vec<DocumentLink>> {
-        let (range, target) = self.schema_target(&params.text_document.uri)?;
-        let doc = &self.doc(&params.text_document.uri).ok()?.doc;
-        Some(vec![DocumentLink {
-            range: conv::range(doc, range),
-            target: conv::url_to_uri(&target),
-            tooltip: Some("Open the schema".to_owned()),
-            data: None,
-        }])
+        let uri = &params.text_document.uri;
+        let mut links = Vec::new();
+        if let Some((range, target)) = self.schema_target(uri) {
+            let doc = &self.doc(uri).ok()?.doc;
+            links.push(DocumentLink {
+                range: conv::range(doc, range),
+                target: conv::url_to_uri(&target),
+                tooltip: Some("Open the schema".to_owned()),
+                data: None,
+            });
+        }
+        let doc = self.doc(uri).ok()?;
+        for s in toml_ide::path_strings(&doc.doc) {
+            // The schema link covers its own string.
+            if links.iter().any(|l| l.range == conv::range(&doc.doc, s.range)) {
+                continue;
+            }
+            if let Some(target) = open_target(doc, &s.path) {
+                links.push(DocumentLink {
+                    range: conv::range(&doc.doc, s.range),
+                    target: conv::path_to_uri(&target),
+                    tooltip: Some(format!("Open {}", target.display())),
+                    data: None,
+                });
+            }
+        }
+        Some(links)
     }
 
     pub(crate) fn goto_definition(
@@ -215,17 +252,52 @@ impl Server {
         params: GotoDefinitionParams,
     ) -> Option<GotoDefinitionResponse> {
         let p = params.text_document_position_params;
-        let (range, target) = self.schema_target(&p.text_document.uri)?;
-        let doc = &self.doc(&p.text_document.uri).ok()?.doc;
-        let offset = conv::offset(doc, p.position);
-        if !range.contains_inclusive(offset) || target.scheme() != "file" {
-            return None;
+        let uri = &p.text_document.uri;
+        let location = |target: &std::path::Path| {
+            Some(GotoDefinitionResponse::Scalar(lsp_types::Location {
+                uri: conv::path_to_uri(target)?,
+                range: lsp_types::Range::default(),
+            }))
+        };
+        let offset = {
+            let doc = &self.doc(uri).ok()?.doc;
+            conv::offset(doc, p.position)
+        };
+        if let Some((range, target)) = self.schema_target(uri)
+            && range.contains_inclusive(offset)
+        {
+            return match target.to_file_path() {
+                Ok(path) => location(&path),
+                Err(()) => None,
+            };
         }
-        Some(GotoDefinitionResponse::Scalar(lsp_types::Location {
-            uri: Uri::from_str(target.as_str()).ok()?,
-            range: lsp_types::Range::default(),
-        }))
+        let doc = self.doc(uri).ok()?;
+        // The key of a `path` dependency: its manifest.
+        if self.config.cargo
+            && is_cargo_manifest(doc)
+            && let Some(dir) = toml_ide::cargo_path_dependency(&doc.doc, offset).as_deref()
+            && let Some(target) = open_target(doc, dir)
+        {
+            return location(&target);
+        }
+        let s = toml_ide::path_strings(&doc.doc)
+            .into_iter()
+            .find(|s| s.range.contains_inclusive(offset))?;
+        location(&open_target(doc, &s.path)?)
     }
+}
+
+/// The file a path string of `doc` opens: the file, or the `Cargo.toml`
+/// of a directory. Relative paths are relative to the document.
+fn open_target(doc: &crate::server::Doc, path: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(path);
+    let full =
+        if path.is_absolute() { path.to_owned() } else { doc.path.as_ref()?.parent()?.join(path) };
+    if full.is_file() {
+        return Some(full);
+    }
+    let manifest = full.join("Cargo.toml");
+    manifest.is_file().then_some(manifest)
 }
 
 /// Encodes the semantic tokens, split at line breaks.
@@ -304,4 +376,114 @@ fn completion_item(doc: &Document, i: toml_ide::CompletionItem) -> CompletionIte
 fn is_cargo_manifest(doc: &crate::server::Doc) -> bool {
     let name = doc.uri.as_str().rsplit('/').next().unwrap_or("");
     name.eq_ignore_ascii_case("Cargo.toml")
+}
+
+impl Server {
+    pub(crate) fn code_actions(
+        &mut self,
+        params: lsp_types::CodeActionParams,
+    ) -> Option<lsp_types::CodeActionResponse> {
+        let uri = params.text_document.uri;
+        let found = self.ide_diagnostics(uri.as_str());
+        let doc = self.doc(&uri).ok()?;
+        let range = conv::text_range(&doc.doc, params.range);
+        let mut actions = Vec::new();
+        for d in found {
+            // Touching ranges count: the cursor at the end of a key.
+            if d.fixes.is_empty() || d.range.start() > range.end() || d.range.end() < range.start()
+            {
+                continue;
+            }
+            let fixes = d.fixes.clone();
+            let diagnostic = crate::server::to_lsp_diagnostic(doc, d);
+            for fix in fixes {
+                actions.push(fix_action(doc, fix, Some(diagnostic.clone())));
+            }
+        }
+        // Last: no problem to fix, conveniences.
+        let url = self.ready_schema(&uri);
+        let cargo = self.config.cargo;
+        let doc = self.doc(&uri).ok()?;
+        let mut extra = Vec::new();
+        if let Some(url) = &url {
+            let schema = Schema { registry: &self.schemas.registry, url };
+            extra.extend(toml_ide::sort_keys_fix(&doc.doc, range.start(), schema));
+        }
+        extra.extend(toml_ide::sort_alphabetically_fix(&doc.doc, range.start()));
+        if cargo && is_cargo_manifest(doc) {
+            let locals = doc
+                .path
+                .as_deref()
+                .and_then(|p| self.workspace_root(p.parent()?))
+                .and_then(|w| toml_ide::cargo_workspace_locals(&w))
+                .unwrap_or_default();
+            extra.extend(toml_ide::cargo_sort_fixes(&doc.doc, range.start(), &locals));
+        }
+        for fix in extra {
+            actions.push(fix_action(doc, fix, None));
+        }
+        Some(actions)
+    }
+}
+
+/// A quick fix of `doc`, solving `diagnostic` if any.
+fn fix_action(
+    doc: &crate::server::Doc,
+    fix: toml_ide::Fix,
+    diagnostic: Option<lsp_types::Diagnostic>,
+) -> lsp_types::CodeActionOrCommand {
+    let edits = fix
+        .edits
+        .iter()
+        .map(|(r, text)| TextEdit { range: conv::range(&doc.doc, *r), new_text: text.clone() })
+        .collect();
+    #[allow(clippy::mutable_key_type)]
+    let changes = std::iter::once((doc.uri.clone(), edits)).collect();
+    lsp_types::CodeActionOrCommand::CodeAction(lsp_types::CodeAction {
+        title: fix.title,
+        kind: Some(lsp_types::CodeActionKind::QUICKFIX),
+        diagnostics: diagnostic.map(|d| vec![d]),
+        edit: Some(lsp_types::WorkspaceEdit { changes: Some(changes), ..Default::default() }),
+        is_preferred: Some(fix.preferred),
+        ..Default::default()
+    })
+}
+
+impl Server {
+    /// The manifest at `path`: the editor text when it is open.
+    pub(crate) fn read_manifest(&self, path: &std::path::Path) -> Option<Document> {
+        let same = |p: &std::path::Path| {
+            if cfg!(windows) {
+                p.to_string_lossy().eq_ignore_ascii_case(&path.to_string_lossy())
+            } else {
+                p == path
+            }
+        };
+        if let Some(open) = self.docs.values().find(|d| d.path.as_deref().is_some_and(same)) {
+            return Some(open.doc.clone());
+        }
+        std::fs::read_to_string(path).ok().map(Document::new)
+    }
+
+    /// The version and features of the local dependency of `context`, from
+    /// its `Cargo.toml`.
+    fn local_crate_answer(&self, uri: &Uri, context: &toml_ide::CargoContext) -> Answer {
+        let found = (|| {
+            let doc = self.doc(uri).ok()?;
+            let dir = doc.path.as_deref()?.parent()?.join(context.local_path.as_deref()?);
+            let child = self.read_manifest(&dir.join("Cargo.toml"))?;
+            let workspace = self.workspace_root(&dir);
+            Some(toml_ide::cargo_local_crate(&child, workspace.as_ref()))
+        })();
+        Answer::Versions(
+            found.filter(|v| !v.version.is_empty() || !v.features.is_empty()).into_iter().collect(),
+        )
+    }
+
+    /// The `Cargo.toml` with a `[workspace]` in `dir` or above.
+    pub(crate) fn workspace_root(&self, dir: &std::path::Path) -> Option<Document> {
+        dir.ancestors()
+            .filter_map(|d| self.read_manifest(&d.join("Cargo.toml")))
+            .find(|m| m.dom.root.get("workspace").is_some())
+    }
 }

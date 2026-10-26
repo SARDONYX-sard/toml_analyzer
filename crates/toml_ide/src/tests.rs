@@ -213,3 +213,200 @@ fn cargo_items() {
             && !crate::cargo::matches_requirement("~1.2.3", "1.3.0")
     );
 }
+
+/// Applies the fixes of every diagnostic, one at a time.
+fn check_fixes(src: &str, expect: Expect) {
+    let r = registry();
+    let schema = Schema { registry: &r, url: URL };
+    let doc = Document::new(src);
+    let mut out = String::new();
+    for d in diagnostics(&doc, SchemaState::Ready(schema)) {
+        for f in &d.fixes {
+            let mut text = src.to_owned();
+            for (range, new) in f.edits.iter().rev() {
+                text.replace_range(usize::from(range.start())..usize::from(range.end()), new);
+            }
+            let star = if f.preferred { "*" } else { " " };
+            out.push_str(&format!("{star}{} => {text:?}\n", f.title));
+        }
+    }
+    expect.assert_eq(&out);
+}
+
+#[test]
+fn quick_fixes() {
+    check_fixes(
+        "version = 1\n[package]\nnmae = \"x\" # c\nedition = \"2018\"\n",
+        expect![[r#"
+            *Convert to the string "1" => "version = \"1\"\n[package]\nnmae = \"x\" # c\nedition = \"2018\"\n"
+            *Add `name` => "version = 1\n[package]\nnmae = \"x\" # c\nedition = \"2018\"\nname = \"\"\n"
+            *Rename to `name` => "version = 1\n[package]\nname = \"x\" # c\nedition = \"2018\"\n"
+             Remove `nmae` => "version = 1\n[package]\nedition = \"2018\"\n"
+             Replace with `"2021"` => "version = 1\n[package]\nnmae = \"x\" # c\nedition = \"2021\"\n"
+             Replace with `"2024"` => "version = 1\n[package]\nnmae = \"x\" # c\nedition = \"2024\"\n"
+        "#]],
+    );
+    check_fixes(
+        "a = word\na = 2\npackage = { publish = \"true\" }\n",
+        expect![[r#"
+        *Quote as "word" => "a = \"word\"\na = 2\npackage = { publish = \"true\" }\n"
+         Remove the duplicate key => "a = word\npackage = { publish = \"true\" }\n"
+        *Add `name` => "a = word\na = 2\npackage = { publish = \"true\", name = \"\" }\n"
+        *Convert to `true` => "a = word\na = 2\npackage = { publish = true }\n"
+    "#]],
+    );
+}
+
+#[test]
+fn cargo_hover_and_links() {
+    let (doc, offset) = cursor(
+        "[dependencies]\nser$0de = { version = \"1.0\", features = [\"derive\"] }\nlocal = { path = \"../local\" }\nws.workspace = true\n",
+    );
+    let h = crate::cargo_hover_context(&doc, offset).unwrap();
+    assert_eq!(
+        crate::cargo_hover_markdown(&h),
+        "**serde** `1.0`\n\n[docs.rs](https://docs.rs/serde/1.0) · [crates.io](https://crates.io/crates/serde)"
+    );
+    let links: Vec<String> = crate::cargo_docs_links(&doc)
+        .into_iter()
+        .map(|(r, u)| format!("{} {u}", &doc.text[r]))
+        .collect();
+    assert_eq!(links, ["serde https://docs.rs/serde/1.0"]);
+    let (doc, offset) = cursor("[dependencies]\nlo$0cal = { path = \"../local\" }\n");
+    assert!(crate::cargo_hover_context(&doc, offset).is_none());
+    assert_eq!(crate::cargo_path_dependency(&doc, offset).as_deref(), Some("../local"));
+    let paths: Vec<String> = crate::path_strings(&doc).into_iter().map(|p| p.path).collect();
+    assert_eq!(paths, ["../local"]);
+}
+
+#[test]
+fn sort_keys() {
+    let r = registry();
+    let schema = Schema { registry: &r, url: URL };
+    let src = "[package]\npublish = true\n# the name\nname = \"x\"\nother = 1\n\nedition = \"2024\"\n[bin]\n";
+    let (doc, offset) = (Document::new(src), TextSize::new(12));
+    let fix = crate::sort_keys_fix(&doc, offset, schema).unwrap();
+    let mut text = src.to_owned();
+    for (range, new) in fix.edits.iter().rev() {
+        text.replace_range(usize::from(range.start())..usize::from(range.end()), new);
+    }
+    assert_eq!(
+        text,
+        "[package]\n# the name\nname = \"x\"\npublish = true\nother = 1\n\nedition = \"2024\"\n[bin]\n"
+    );
+    assert!(crate::sort_keys_fix(&Document::new(text.clone()), offset, schema).is_none());
+}
+
+#[test]
+fn cargo_sort() {
+    let src = "[package]\nname = \"x\"\n\n[dependencies]\nserde = { version = \"1\" }\n# local\nhi = { path = \"../hi\" }\n\n# logging\nanyhow = \"1\"\nZed = { path = \"z\" }\n\n[dev-dependencies]\n";
+    let doc = Document::new(src);
+    let offset = TextSize::new(src.find("serde").unwrap() as u32);
+    let all = || {
+        crate::cargo_sort_fixes(&doc, offset, &[])
+            .into_iter()
+            .chain(crate::sort_alphabetically_fix(&doc, offset))
+    };
+    for fix in all() {
+        let mut text = src.to_owned();
+        for (range, new) in fix.edits.iter().rev() {
+            text.replace_range(usize::from(range.start())..usize::from(range.end()), new);
+        }
+        let section =
+            &text[text.find("[dependencies]\n").unwrap() + 15..text.find("\n[dev").unwrap()];
+        match fix.title.as_str() {
+            "Sort keys alphabetically" => assert_eq!(
+                section,
+                "# local\nhi = { path = \"../hi\" }\nserde = { version = \"1\" }\n\n# logging\nanyhow = \"1\"\nZed = { path = \"z\" }\n"
+            ),
+            "Sort dependencies, local first" => assert_eq!(
+                section,
+                "# local\nhi = { path = \"../hi\" }\nZed = { path = \"z\" }\n\n# logging\nanyhow = \"1\"\nserde = { version = \"1\" }\n"
+            ),
+            "Sort dependencies, local last" => assert_eq!(
+                section,
+                "# logging\nanyhow = \"1\"\nserde = { version = \"1\" }\n\n# local\nhi = { path = \"../hi\" }\nZed = { path = \"z\" }\n"
+            ),
+            other => panic!("{other}"),
+        }
+    }
+    assert_eq!(all().count(), 3);
+}
+
+#[test]
+fn cargo_local() {
+    let child = Document::new(
+        "[package]\nname = \"hi\"\nversion.workspace = true\n[features]\ndefault = [\"std\"]\nstd = []\nserde = [\"dep:serde\"]\n[dependencies]\nserde = { version = \"1\", optional = true }\nlog = { version = \"0.4\", optional = true }\n",
+    );
+    let ws = Document::new(
+        "[workspace]\nmembers = [\"*\"]\n[workspace.package]\nversion = \"0.3.1\"\n[workspace.dependencies]\nhi = { path = \"hi\" }\nserde = \"1\"\n",
+    );
+    let v = crate::cargo_local_crate(&child, Some(&ws));
+    assert_eq!(
+        (v.version.as_str(), v.features),
+        (
+            "0.3.1",
+            vec!["default".to_owned(), "log".to_owned(), "serde".to_owned(), "std".to_owned()]
+        )
+    );
+    assert_eq!(crate::cargo_workspace_locals(&ws), Some(vec!["hi".to_owned()]));
+
+    // `workspace = true` users of local crates are local; groups keep their headings.
+    let src = "[dependencies]\n# local crates\nzed.workspace = true\nhi.workspace = true\n\n# others\nserde.workspace = true\nanyhow = \"1\"\n";
+    let doc = Document::new(src);
+    let apply = |title: &str, text: &str| {
+        let doc = Document::new(text);
+        let fix =
+            crate::cargo_sort_fixes(&doc, TextSize::new(16), &["hi".to_owned(), "zed".to_owned()])
+                .into_iter()
+                .chain(crate::sort_alphabetically_fix(&doc, TextSize::new(16)))
+                .find(|f| f.title == title)?;
+        let mut out = text.to_owned();
+        for (range, new) in fix.edits.iter().rev() {
+            out.replace_range(usize::from(range.start())..usize::from(range.end()), new);
+        }
+        Some(out)
+    };
+    let alpha = apply("Sort keys alphabetically", src).unwrap();
+    assert_eq!(
+        alpha,
+        "[dependencies]\n# local crates\nhi.workspace = true\nzed.workspace = true\n\n# others\nanyhow = \"1\"\nserde.workspace = true\n"
+    );
+    // Already grouped: local first changes nothing but the order inside.
+    assert_eq!(apply("Sort dependencies, local first", &alpha), None);
+    let last = apply("Sort dependencies, local last", &alpha).unwrap();
+    assert_eq!(
+        last,
+        "[dependencies]\n# others\nanyhow = \"1\"\nserde.workspace = true\n\n# local crates\nhi.workspace = true\nzed.workspace = true\n"
+    );
+    let first = apply("Sort dependencies, local first", &last).unwrap();
+    assert_eq!(first, alpha, "no duplicated heading");
+    let _ = doc;
+}
+
+#[test]
+fn cargo_sort_adds_no_heading() {
+    let src = "[dependencies]\nserde = \"1\"\nhi = { path = \"hi\" }\n";
+    let doc = Document::new(src);
+    let fix = crate::cargo_sort_fixes(&doc, TextSize::new(16), &[])
+        .into_iter()
+        .find(|f| f.title == "Sort dependencies, local first")
+        .unwrap();
+    assert_eq!(fix.edits[0].1, "hi = { path = \"hi\" }\n\nserde = \"1\"\n");
+}
+
+#[test]
+fn sort_alphabetically() {
+    let src = "[features]\ndefault = []\n# sample\nlog = []\naa = []\n\nzz = []\nbb = []\n";
+    let doc = Document::new(src);
+    let fix = crate::sort_alphabetically_fix(&doc, TextSize::new(14)).unwrap();
+    assert_eq!(fix.edits[0].1, "aa = []\ndefault = []\n# sample\nlog = []\n\nbb = []\nzz = []\n");
+    // Before the first header too, its leading comments staying on top.
+    let doc = Document::new("#:schema ./s.json\nb = 1\na = 2\n[t]\n");
+    let fix = crate::sort_alphabetically_fix(&doc, TextSize::new(20)).unwrap();
+    assert_eq!(fix.edits[0].1, "#:schema ./s.json\na = 2\nb = 1\n");
+    assert!(
+        crate::sort_alphabetically_fix(&Document::new("[t]\na = 1\nb = 2\n"), TextSize::new(5))
+            .is_none()
+    );
+}

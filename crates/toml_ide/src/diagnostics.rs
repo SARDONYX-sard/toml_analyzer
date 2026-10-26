@@ -2,7 +2,11 @@
 
 use toml_parser::{TextRange, TextSize};
 
-use crate::{Document, Schema, SchemaLocation, schema_location};
+use crate::{
+    Document, Schema, SchemaLocation,
+    fixes::{self, Fix},
+    schema_location,
+};
 
 /// How bad a problem is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,6 +17,8 @@ pub enum Severity {
     Warning,
     /// Information.
     Information,
+    /// Barely shown: a strike-through, no entry in the problem list.
+    Hint,
 }
 
 /// A problem.
@@ -28,6 +34,10 @@ pub struct Diagnostic {
     pub message: String,
     /// Related places, e.g. the first definition of a duplicate.
     pub related: Vec<(TextRange, String)>,
+    /// Quick fixes.
+    pub fixes: Vec<Fix>,
+    /// About something deprecated: editors strike it through.
+    pub deprecated: bool,
 }
 
 /// The schema of the document, as far as the caller got.
@@ -54,6 +64,8 @@ pub fn diagnostics(doc: &Document, schema: SchemaState<'_>) -> Vec<Diagnostic> {
             code: "syntax",
             message: e.message().to_owned(),
             related: Vec::new(),
+            fixes: fixes::syntax_fixes(doc, e),
+            deprecated: false,
         })
         .collect();
     out.extend(doc.dom.errors.iter().map(|e| Diagnostic {
@@ -62,6 +74,8 @@ pub fn diagnostics(doc: &Document, schema: SchemaState<'_>) -> Vec<Diagnostic> {
         code: "toml",
         message: e.message.clone(),
         related: e.related.iter().cloned().collect(),
+        fixes: if e.removable { fixes::remove_duplicate(doc, e.range) } else { Vec::new() },
+        deprecated: false,
     }));
 
     let location = schema_location(doc);
@@ -74,6 +88,8 @@ pub fn diagnostics(doc: &Document, schema: SchemaState<'_>) -> Vec<Diagnostic> {
             code: "schema",
             message: reason.to_owned(),
             related: Vec::new(),
+            fixes: Vec::new(),
+            deprecated: false,
         }),
         SchemaState::Ready(schema) => {
             out.extend(schema_diagnostics(doc, schema, location.as_ref(), anchor))
@@ -107,9 +123,22 @@ fn schema_diagnostics(
                 range,
                 severity: match e.severity {
                     toml_schema::Severity::Error => Severity::Error,
+                    // Deprecated without a replacement, e.g. `authors` of
+                    // Cargo: still valid, nothing to do but strike it through.
+                    toml_schema::Severity::Warning
+                        if e.deprecated
+                            && !e
+                                .suggestions
+                                .iter()
+                                .any(|s| matches!(s, toml_schema::Suggestion::RenameKey(_))) =>
+                    {
+                        Severity::Hint
+                    }
                     toml_schema::Severity::Warning => Severity::Warning,
                 },
                 code: "schema",
+                fixes: fixes::schema_fixes(doc, &e),
+                deprecated: e.deprecated,
                 message: e.message,
                 related: Vec::new(),
             }

@@ -4,6 +4,7 @@
 //! controlled with the `RUST_LOG` environment variable (default: `info`).
 
 mod cli;
+mod clippy;
 mod config;
 mod conv;
 mod crates;
@@ -83,6 +84,12 @@ fn capabilities() -> ServerCapabilities {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         document_symbol_provider: Some(OneOf::Left(true)),
+        code_action_provider: Some(lsp_types::CodeActionProviderCapability::Options(
+            lsp_types::CodeActionOptions {
+                code_action_kinds: Some(vec![lsp_types::CodeActionKind::QUICKFIX]),
+                ..Default::default()
+            },
+        )),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
         document_formatting_provider: Some(OneOf::Left(true)),
         document_link_provider: Some(lsp_types::DocumentLinkOptions {

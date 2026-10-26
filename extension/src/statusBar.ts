@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import { ClearSchemaCacheRequest, DocumentSchemaRequest, type DocumentSchemaResult, StatusRequest } from "./protocol";
+import { NO_SCHEMA, resetSchema, useAnotherSchema, useNoSchema } from "./schemaPicker";
 import { log, runningClient, state } from "./state";
 
 let item: vscode.StatusBarItem | undefined;
@@ -13,6 +14,10 @@ export function createStatusBar(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     item,
     vscode.window.onDidChangeActiveTextEditor(() => void refreshStatus()),
+    // A schema chosen in the settings: the server needs a moment.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("toml")) scheduleRefresh();
+    }),
     vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.document === vscode.window.activeTextEditor?.document) {
         scheduleRefresh();
@@ -42,7 +47,10 @@ export async function refreshStatus(): Promise<void> {
     log(`toml/documentSchema failed: ${String(error)}`);
     return;
   }
-  if (!current.url) {
+  if (!current.url && current.associationUrl === NO_SCHEMA) {
+    item.text = "$(circle-slash) No schema";
+    item.tooltip = `Disabled by toml.schemas: "${current.pattern ?? ""}"`;
+  } else if (!current.url) {
     item.text = "$(json) No schema";
     item.tooltip = "No JSON Schema applies to this file";
   } else {
@@ -96,9 +104,33 @@ export async function showStatus(): Promise<void> {
 /** `toml.schemaActions`: what the status bar item offers. */
 export async function schemaActions(): Promise<void> {
   const picks: (vscode.QuickPickItem & { run: () => unknown })[] = [];
-  if (current?.url) {
-    const url = current.url;
+  const document = vscode.window.activeTextEditor?.document;
+  const shown = current;
+  if (shown?.url) {
+    const url = shown.url;
     picks.push({ label: "$(go-to-file) Open the schema", detail: url, run: () => openSchema(url) });
+  }
+  if (document?.languageId === "toml") {
+    const uri = document.uri;
+    picks.push(
+      {
+        label: "$(edit) Use another schema…",
+        detail: "Wrong schema? Choose one from SchemaStore, a file or a URL, for this file or a glob (saved in toml.schemas)",
+        run: () => useAnotherSchema(uri, shown),
+      },
+      {
+        label: "$(circle-slash) Use no schema…",
+        detail: "Disable the schema for this file or a glob",
+        run: () => useNoSchema(uri, shown),
+      },
+    );
+    if (shown?.source === "settings" && shown.associationUrl && shown.pattern) {
+      picks.push({
+        label: "$(discard) Reset to automatic",
+        detail: `Remove "${shown.associationUrl}": "${shown.pattern}" from toml.schemas`,
+        run: () => resetSchema(shown),
+      });
+    }
   }
   picks.push(
     {

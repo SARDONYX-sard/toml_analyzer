@@ -15,6 +15,11 @@ pub(crate) fn url_to_uri(url: &url::Url) -> Option<Uri> {
     Uri::from_str(url.as_str()).ok()
 }
 
+/// Converts an absolute path into a `file://` URI.
+pub(crate) fn path_to_uri(path: &std::path::Path) -> Option<Uri> {
+    url::Url::from_file_path(path).ok().as_ref().and_then(url_to_uri)
+}
+
 pub(crate) fn offset(doc: &Document, pos: Position) -> TextSize {
     doc.line_index.offset(&doc.text, LineCol { line: pos.line, col: pos.character })
 }

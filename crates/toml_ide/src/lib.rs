@@ -8,12 +8,15 @@
 mod cargo;
 mod completion;
 mod diagnostics;
+mod fixes;
 mod folding;
 mod hover;
 mod line_index;
+mod links;
 mod position;
 mod schema_location;
 mod semantic_tokens;
+mod sort;
 mod symbols;
 
 #[cfg(test)]
@@ -27,17 +30,22 @@ pub use toml_schema::{Registry, SchemaRef};
 
 pub use crate::{
     cargo::{
-        CargoContext, CargoQuery, CargoTarget, CrateSummary, CrateVersion, cargo_completions,
-        cargo_context,
+        CargoContext, CargoHover, CargoQuery, CargoTarget, CrateSummary, CrateVersion,
+        cargo_completions, cargo_context, cargo_docs_links, cargo_hover_context,
+        cargo_hover_markdown, cargo_local_crate, cargo_path_dependency, cargo_sort_fixes,
+        cargo_workspace_locals,
     },
     completion::{CompletionItem, CompletionKind, completions},
     diagnostics::{Diagnostic, SchemaState, Severity, diagnostics},
+    fixes::{Fix, sort_keys_fix},
     folding::{Fold, FoldKind, folding_ranges},
     hover::{Hover, hover},
     line_index::{LineCol, LineIndex},
+    links::{PathString, path_strings},
     position::{Position, PositionKind, position_at},
     schema_location::{SchemaLocation, SchemaSource, resolve_location, schema_location},
     semantic_tokens::{SemanticToken, TokenType, semantic_tokens},
+    sort::sort_alphabetically_fix,
     symbols::{Symbol, SymbolKind, document_symbols},
 };
 

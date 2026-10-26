@@ -29,6 +29,8 @@ pub struct DomError {
     pub range: TextRange,
     /// The previous definition, for duplicates.
     pub related: Option<(TextRange, String)>,
+    /// The definition at `range` is a duplicate entry that can be removed.
+    pub removable: bool,
 }
 
 /// The data of a document, see the crate documentation.

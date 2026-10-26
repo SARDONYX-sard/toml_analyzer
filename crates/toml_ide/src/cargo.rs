@@ -5,7 +5,7 @@
 //! needed at the cursor, and [`cargo_completions`] turns the answer into
 //! completion items.
 
-use toml_dom::{Item, PathSegment, ValueKind};
+use toml_dom::{Item, Path, PathSegment, ValueKind};
 use toml_parser::{TextRange, TextSize};
 
 use crate::{CompletionItem, CompletionKind, Document, PositionKind, position_at, quote};
@@ -77,6 +77,9 @@ pub struct CargoContext {
     pub range: TextRange,
     /// What the registry must answer.
     pub query: CargoQuery,
+    /// The `path` of a local dependency: its `Cargo.toml` answers instead
+    /// of the registry, see [`cargo_local_crate`].
+    pub local_path: Option<String>,
 }
 
 const DEPENDENCY_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
@@ -120,6 +123,7 @@ pub fn cargo_context(doc: &Document, offset: TextSize) -> Option<CargoContext> {
                 target: CargoTarget::Name { header: *header, has_value },
                 range: *range,
                 query: CargoQuery::Search(prefix.to_owned()),
+                local_path: None,
             })
         }
         PositionKind::Value { range } => {
@@ -149,7 +153,13 @@ pub fn cargo_context(doc: &Document, offset: TextSize) -> Option<CargoContext> {
                 }
                 other => other,
             };
-            Some(CargoContext { target, range: *range, query: CargoQuery::Versions(real) })
+            let local_path = string_at(doc, &with(&path[..=table], "path"));
+            Some(CargoContext {
+                target,
+                range: *range,
+                query: CargoQuery::Versions(real),
+                local_path,
+            })
         }
         _ => None,
     }
@@ -241,8 +251,11 @@ pub fn cargo_completions(
             })
             .collect(),
         CargoTarget::Version { name } => {
-            let mut list: Vec<&CrateVersion> =
-                versions.unwrap_or_default().iter().filter(|v| !v.yanked).collect();
+            let mut list: Vec<&CrateVersion> = versions
+                .unwrap_or_default()
+                .iter()
+                .filter(|v| !v.yanked && !v.version.is_empty())
+                .collect();
             list.sort_by(|a, b| compare_versions(&b.version, &a.version));
             list.iter()
                 .enumerate()
@@ -359,4 +372,251 @@ pub(crate) fn matches_requirement(req: &str, version: &str) -> bool {
             }
         }
     }
+}
+
+/// What a hover on the key of a dependency shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CargoHover {
+    /// The hovered key.
+    pub range: TextRange,
+    /// The crate.
+    pub name: String,
+    /// The version requirement, if any.
+    pub requirement: Option<String>,
+}
+
+/// The dependency whose key is hovered at `offset` in a `Cargo.toml`,
+/// unless it comes from a path or git.
+pub fn cargo_hover_context(doc: &Document, offset: TextSize) -> Option<CargoHover> {
+    let position = position_at(doc, offset);
+    let PositionKind::Key { range, segment: Some(_), .. } = &position.kind else { return None };
+    let path = position.key_path()?;
+    let table = dependency_table(&path)?;
+    if path.len() <= table {
+        return None;
+    }
+    let dep = &path[..=table];
+    if string_at(doc, &with(dep, "path")).is_some() || string_at(doc, &with(dep, "git")).is_some() {
+        return None;
+    }
+    let PathSegment::Key(key) = dep.last()? else { return None };
+    let name = package_name(doc, dep).unwrap_or_else(|| key.clone());
+    Some(CargoHover { range: *range, name, requirement: requirement(doc, dep) })
+}
+
+/// The docs.rs URL of a crate, for the version a requirement selects.
+fn docs_url(name: &str, requirement: Option<&str>) -> String {
+    match requirement.map(str::trim).filter(|r| !r.is_empty() && *r != "*") {
+        Some(req) => format!("https://docs.rs/{name}/{}", encode(req)),
+        None => format!("https://docs.rs/{name}"),
+    }
+}
+
+/// Links from the keys of registry dependencies to their documentation.
+/// Dependencies from a path or git have none.
+pub fn cargo_docs_links(doc: &Document) -> Vec<(TextRange, String)> {
+    let root = &doc.dom.root;
+    let mut tables: Vec<Path> = Vec::new();
+    let key = |k: &str| PathSegment::Key(k.to_owned());
+    for t in DEPENDENCY_TABLES {
+        tables.push(vec![key(t)]);
+    }
+    tables.push(vec![key("workspace"), key("dependencies")]);
+    if let Some(Item::Table(targets)) = root.get("target") {
+        for target in targets.entries() {
+            for t in DEPENDENCY_TABLES {
+                tables.push(vec![key("target"), key(&target.key), key(t)]);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for table in tables {
+        let Some(Item::Table(deps)) = doc.dom.get(&table) else { continue };
+        for entry in deps.entries() {
+            let dep = with(&table, &entry.key);
+            if string_at(doc, &with(&dep, "path")).is_some()
+                || string_at(doc, &with(&dep, "git")).is_some()
+            {
+                continue;
+            }
+            // `serde.workspace = true` takes the version of the workspace.
+            if matches!(doc.dom.get(&with(&dep, "workspace")), Some(Item::Value(_))) {
+                continue;
+            }
+            let name = package_name(doc, &dep).unwrap_or_else(|| entry.key.clone());
+            out.push((entry.key_range, docs_url(&name, requirement(doc, &dep).as_deref())));
+        }
+    }
+    out
+}
+
+/// The Markdown of a dependency hover: links to the documentation of the
+/// version the requirement selects (docs.rs resolves requirements).
+pub fn cargo_hover_markdown(hover: &CargoHover) -> String {
+    let name = &hover.name;
+    let version =
+        hover.requirement.as_deref().map(str::trim).filter(|r| !r.is_empty() && *r != "*");
+    let docs = docs_url(name, version);
+    let shown = version.map_or_else(String::new, |v| format!(" `{v}`"));
+    format!("**{name}**{shown}\n\n[docs.rs]({docs}) · [crates.io](https://crates.io/crates/{name})")
+}
+
+/// Percent-encodes the characters of a requirement that URLs do not take.
+fn encode(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '.' | '-' | '_' | '~' | '^' | '*' => c.to_string(),
+            c => c.to_string().bytes().map(|b| format!("%{b:02X}")).collect(),
+        })
+        .collect()
+}
+/// The `path` of the dependency whose key is at `offset`: go to definition
+/// opens its `Cargo.toml`.
+pub fn cargo_path_dependency(doc: &Document, offset: TextSize) -> Option<String> {
+    let position = position_at(doc, offset);
+    let path = position.key_path()?;
+    let table = dependency_table(&path)?;
+    if path.len() <= table {
+        return None;
+    }
+    string_at(doc, &with(&path[..=table], "path"))
+}
+
+/// The names of the `[workspace.dependencies]` that come from a path, when
+/// `doc` is the root of a workspace: their `dep.workspace = true` users are
+/// local too.
+pub fn cargo_workspace_locals(doc: &Document) -> Option<Vec<String>> {
+    let Some(Item::Table(workspace)) = doc.dom.root.get("workspace") else { return None };
+    let deps = match workspace.get("dependencies") {
+        Some(Item::Table(t)) => t,
+        _ => return Some(Vec::new()),
+    };
+    let base =
+        [PathSegment::Key("workspace".to_owned()), PathSegment::Key("dependencies".to_owned())];
+    Some(
+        deps.entries()
+            .iter()
+            .filter(|e| string_at(doc, &with(&with(&base, &e.key), "path")).is_some())
+            .map(|e| e.key.clone())
+            .collect(),
+    )
+}
+
+/// Ways to sort the dependency table at `offset`, with the local
+/// dependencies (`path`, or `workspace = true` naming one of
+/// `workspace_locals`) first or last, each kind in one group. Alphabetical
+/// order is [`crate::sort_alphabetically_fix`].
+///
+/// No heading is added: a group heading goes with the kind of its entries
+/// (one starting with `# local` with the local ones), and a `# local`
+/// comment above an entry heads the local dependencies.
+pub fn cargo_sort_fixes(
+    doc: &Document,
+    offset: TextSize,
+    workspace_locals: &[String],
+) -> Vec<crate::Fix> {
+    use crate::sort::{Chunk, name_key};
+
+    let Some(section) = crate::sort::section(doc, offset) else { return Vec::new() };
+    let path = &section.path;
+    if path.is_empty() || dependency_table(path) != Some(path.len()) {
+        return Vec::new();
+    }
+    let is_local = |c: &Chunk| {
+        let dep = with(path, &c.name);
+        let from_workspace = matches!(
+            doc.dom.get(&with(&dep, "workspace")),
+            Some(Item::Value(v)) if matches!(v.kind, ValueKind::Bool(true))
+        );
+        string_at(doc, &with(&dep, "path")).is_some()
+            || (from_workspace && workspace_locals.contains(&c.name))
+    };
+    let is_local_heading = |h: &str| h.trim_start().to_ascii_lowercase().starts_with("# local");
+    // `# local` comment lines above an entry become the heading.
+    let sorted = |chunks: Vec<&Chunk>| {
+        let mut chunks = chunks;
+        chunks.sort_by_key(|c| name_key(&c.name));
+        chunks
+            .iter()
+            .map(|c| {
+                let comments = if is_local_heading(&c.comments) { "" } else { c.comments.as_str() };
+                format!("{comments}{}", c.lines)
+            })
+            .collect::<String>()
+    };
+
+    let groups = &section.groups;
+    let all: Vec<&Chunk> = groups.iter().flat_map(|g| &g.chunks).collect();
+    let (local, other): (Vec<&Chunk>, Vec<&Chunk>) = all.iter().partition(|c| is_local(c));
+    if local.is_empty() || other.is_empty() {
+        return Vec::new();
+    }
+    let mut local_heading = String::new();
+    let mut other_heading = String::new();
+    for g in groups.iter().filter(|g| !g.heading.is_empty()) {
+        let local_group = is_local_heading(&g.heading)
+            || (!g.chunks.is_empty() && g.chunks.iter().all(&is_local));
+        let target = if local_group { &mut local_heading } else { &mut other_heading };
+        target.push_str(&g.heading);
+    }
+    if local_heading.is_empty()
+        && let Some(c) = all.iter().find(|c| is_local_heading(&c.comments))
+    {
+        local_heading = c.comments.clone();
+    }
+    let local_block = format!("{local_heading}{}", sorted(local));
+    let other_block = format!("{other_heading}{}", sorted(other));
+    let options = vec![
+        ("Sort dependencies, local first", format!("{local_block}\n{other_block}")),
+        ("Sort dependencies, local last", format!("{other_block}\n{local_block}")),
+    ];
+    crate::sort::fixes(doc, &section, options)
+}
+
+/// The version and the features of a local crate, from its `Cargo.toml`
+/// (`child`), and the root of its workspace for `version.workspace = true`.
+pub fn cargo_local_crate(child: &Document, workspace: Option<&Document>) -> CrateVersion {
+    let key = |k: &str| PathSegment::Key(k.to_owned());
+    let version = string_at(child, &[key("package"), key("version")])
+        .or_else(|| {
+            workspace
+                .and_then(|w| string_at(w, &[key("workspace"), key("package"), key("version")]))
+        })
+        .unwrap_or_default();
+    let mut features: Vec<String> = match child.dom.root.get("features") {
+        Some(Item::Table(t)) => t.entries().iter().map(|e| e.key.clone()).collect(),
+        _ => Vec::new(),
+    };
+    // Optional dependencies are features too, unless a `dep:` hides them.
+    let hidden: Vec<String> = match child.dom.root.get("features") {
+        Some(Item::Table(t)) => t
+            .entries()
+            .iter()
+            .filter_map(|e| match &e.item {
+                Item::Array(a) => Some(a.items.iter().filter_map(|i| match i {
+                    Item::Value(v) => match &v.kind {
+                        ValueKind::String(s) => s.strip_prefix("dep:").map(str::to_owned),
+                        _ => None,
+                    },
+                    _ => None,
+                })),
+                _ => None,
+            })
+            .flatten()
+            .collect(),
+        _ => Vec::new(),
+    };
+    if let Some(Item::Table(deps)) = child.dom.root.get("dependencies") {
+        for e in deps.entries() {
+            let optional = matches!(
+                child.dom.get(&[key("dependencies"), key(&e.key), key("optional")]),
+                Some(Item::Value(v)) if matches!(v.kind, ValueKind::Bool(true))
+            );
+            if optional && !hidden.contains(&e.key) && !features.contains(&e.key) {
+                features.push(e.key.clone());
+            }
+        }
+    }
+    features.sort_by(|a, b| (a != "default", a).cmp(&(b != "default", b)));
+    CrateVersion { version, yanked: false, features }
 }

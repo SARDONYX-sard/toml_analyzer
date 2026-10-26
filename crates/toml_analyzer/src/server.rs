@@ -43,6 +43,21 @@ pub(crate) struct Selection {
     pub(crate) source: &'static str,
     /// Why the location of the document cannot be resolved.
     pub(crate) error: Option<String>,
+    /// The association of `toml.schemas` that chose the schema: its URL as
+    /// written and the pattern matching the document.
+    pub(crate) matched: Option<(String, String)>,
+}
+
+/// A schema association, resolved.
+struct ResolvedAssociation {
+    /// `None` for `"none"`: the files have no schema.
+    url: Option<String>,
+    /// The URL as written in the settings.
+    written: String,
+    globs: globset::GlobSet,
+    /// The patterns of `globs`, as written.
+    patterns: Vec<String>,
+    source: &'static str,
 }
 
 /// The language server.
@@ -55,7 +70,7 @@ pub(crate) struct Server {
     pub(crate) caps: ClientCapabilities,
     pub(crate) schemas: Schemas,
     /// The associations of the settings, then of the extensions, resolved.
-    associations: Vec<(String, globset::GlobSet, &'static str)>,
+    associations: Vec<ResolvedAssociation>,
     /// The crates.io registry, for `Cargo.toml`.
     pub(crate) crates: Crates,
     /// Completions waiting for the registry.
@@ -218,6 +233,9 @@ impl Server {
             SemanticTokensRangeRequest::METHOD => {
                 handle::<SemanticTokensRangeRequest>(self, params, Server::semantic_tokens_range)
             }
+            CodeActionRequest::METHOD => {
+                handle::<CodeActionRequest>(self, params, Server::code_actions)
+            }
             DocumentLinkRequest::METHOD => {
                 handle::<DocumentLinkRequest>(self, params, Server::document_links)
             }
@@ -229,6 +247,9 @@ impl Server {
             }
             crate::ext::DocumentSchema::METHOD => {
                 handle::<crate::ext::DocumentSchema>(self, params, Server::document_schema)
+            }
+            crate::ext::SchemaCatalog::METHOD => {
+                handle::<crate::ext::SchemaCatalog>(self, params, Server::schema_catalog)
             }
             crate::ext::Status::METHOD => {
                 handle::<crate::ext::Status>(self, params, Server::status)
@@ -346,17 +367,35 @@ impl Server {
     /// Resolves the URLs of the associations: relative paths of the
     /// settings are relative to the first workspace folder.
     fn resolve_associations(&mut self) {
-        let root = self.roots.first().and_then(|r| url::Url::from_directory_path(r).ok());
+        let root_dir = self.roots.first().cloned();
+        let root = root_dir.as_ref().and_then(|r| url::Url::from_directory_path(r).ok());
         let mut out = Vec::new();
         for (list, source) in
             [(&self.config.schemas, "settings"), (&self.config.contributed, "extension")]
         {
             for a in list {
-                let Some(globs) = glob_set(&a.file_match) else { continue };
-                match toml_ide::resolve_location(&a.url, root.as_ref()) {
-                    Ok(url) => out.push((url.to_string(), globs, source)),
-                    Err(e) => log::warn!("schema association: {e}"),
-                }
+                let Some((globs, patterns)) = glob_set(&a.file_match, root_dir.as_deref()) else {
+                    continue;
+                };
+                // `"none"`: no schema for these files.
+                let url = if a.url.trim().eq_ignore_ascii_case("none") {
+                    None
+                } else {
+                    match toml_ide::resolve_location(&a.url, root.as_ref()) {
+                        Ok(url) => Some(url.to_string()),
+                        Err(e) => {
+                            log::warn!("schema association: {e}");
+                            continue;
+                        }
+                    }
+                };
+                out.push(ResolvedAssociation {
+                    url,
+                    written: a.url.clone(),
+                    globs,
+                    patterns,
+                    source,
+                });
             }
         }
         self.associations = out;
@@ -367,7 +406,7 @@ impl Server {
     /// The schema of the document `key`.
     pub(crate) fn select(&mut self, key: &str) -> Selection {
         let Some(doc) = self.docs.get(key) else {
-            return Selection { url: None, source: "", error: None };
+            return Selection { url: None, source: "", error: None, matched: None };
         };
         if let Some(location) = toml_ide::schema_location(&doc.doc) {
             let source = match location.source {
@@ -376,25 +415,42 @@ impl Server {
             };
             let base = url::Url::parse(doc.uri.as_str()).ok().filter(|u| !u.cannot_be_a_base());
             return match toml_ide::resolve_location(&location.text, base.as_ref()) {
-                Ok(url) => Selection { url: Some(url.to_string()), source, error: None },
-                Err(e) => Selection { url: None, source, error: Some(e) },
+                Ok(url) => {
+                    Selection { url: Some(url.to_string()), source, error: None, matched: None }
+                }
+                Err(e) => Selection { url: None, source, error: Some(e), matched: None },
             };
         }
         let Some(path) = doc.path.clone() else {
-            return Selection { url: None, source: "", error: None };
+            return Selection { url: None, source: "", error: None, matched: None };
         };
         let slashed = crate::schemas::slash_path(&path);
-        if let Some((url, _, source)) =
-            self.associations.iter().find(|(_, g, _)| g.is_match(&slashed))
+        for a in &self.associations {
+            if let Some(&i) = a.globs.matches(&slashed).first() {
+                return Selection {
+                    url: a.url.clone(),
+                    source: a.source,
+                    error: None,
+                    matched: Some((a.written.clone(), a.patterns[i].clone())),
+                };
+            }
+        }
+        if crate::clippy::is_clippy_config(&path)
+            && let Some(dir) = path.parent()
         {
-            return Selection { url: Some(url.clone()), source, error: None };
+            return Selection {
+                url: Some(crate::clippy::schema_url(dir)),
+                source: "builtin",
+                error: None,
+                matched: None,
+            };
         }
         if self.config.schema_store
             && let CatalogMatch::Found(url) = self.schemas.catalog_match(&path)
         {
-            return Selection { url: Some(url), source: "catalog", error: None };
+            return Selection { url: Some(url), source: "catalog", error: None, matched: None };
         }
-        Selection { url: None, source: "", error: None }
+        Selection { url: None, source: "", error: None, matched: None }
     }
 
     /// The schema of `key` with its status.
@@ -417,10 +473,11 @@ impl Server {
         }
     }
 
-    fn publish(&mut self, key: &str) {
+    /// The problems of the document `key`, with its schema.
+    pub(crate) fn ide_diagnostics(&mut self, key: &str) -> Vec<toml_ide::Diagnostic> {
         let (selection, status) =
             if self.config.validate { self.schema_status(key) } else { (self.select(key), None) };
-        let Some(doc) = self.docs.get(key) else { return };
+        let Some(doc) = self.docs.get(key) else { return Vec::new() };
         let failure;
         let state = match (&status, &selection.url) {
             (Some(Status::Ready), Some(url)) => {
@@ -433,33 +490,13 @@ impl Server {
             }
             _ => SchemaState::None,
         };
-        let diagnostics = toml_ide::diagnostics(&doc.doc, state)
-            .into_iter()
-            .map(|d| lsp_types::Diagnostic {
-                range: conv::range(&doc.doc, d.range),
-                severity: Some(match d.severity {
-                    toml_ide::Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
-                    toml_ide::Severity::Warning => lsp_types::DiagnosticSeverity::WARNING,
-                    toml_ide::Severity::Information => lsp_types::DiagnosticSeverity::INFORMATION,
-                }),
-                code: Some(lsp_types::NumberOrString::String(d.code.to_owned())),
-                source: Some("toml".to_owned()),
-                message: d.message,
-                related_information: (!d.related.is_empty()).then(|| {
-                    d.related
-                        .iter()
-                        .map(|(range, message)| lsp_types::DiagnosticRelatedInformation {
-                            location: lsp_types::Location {
-                                uri: doc.uri.clone(),
-                                range: conv::range(&doc.doc, *range),
-                            },
-                            message: message.clone(),
-                        })
-                        .collect()
-                }),
-                ..Default::default()
-            })
-            .collect();
+        toml_ide::diagnostics(&doc.doc, state)
+    }
+
+    fn publish(&mut self, key: &str) {
+        let found = self.ide_diagnostics(key);
+        let Some(doc) = self.docs.get(key) else { return };
+        let diagnostics = found.into_iter().map(|d| to_lsp_diagnostic(doc, d)).collect();
         self.notify::<notification::PublishDiagnostics>(PublishDiagnosticsParams {
             uri: doc.uri.clone(),
             diagnostics,
@@ -482,9 +519,12 @@ impl Server {
         params: lsp_types::TextDocumentIdentifier,
     ) -> crate::ext::DocumentSchemaResult {
         let (selection, status) = self.schema_status(params.uri.as_str());
+        let (association_url, pattern) = selection.matched.clone().unzip();
         crate::ext::DocumentSchemaResult {
             url: selection.url,
             source: (!selection.source.is_empty()).then(|| selection.source.to_owned()),
+            association_url,
+            pattern,
             status: match status {
                 None => "none".to_owned(),
                 Some(Status::Ready) => "ready".to_owned(),
@@ -492,6 +532,22 @@ impl Server {
                 Some(Status::Failed(e)) => format!("failed: {e}"),
             },
         }
+    }
+
+    fn schema_catalog(&mut self, _: ()) -> crate::ext::SchemaCatalogResult {
+        let Some(list) = self.schemas.catalog_list() else {
+            return crate::ext::SchemaCatalogResult { loading: true, schemas: Vec::new() };
+        };
+        let schemas = list
+            .into_iter()
+            .map(|(e, toml)| crate::ext::CatalogSchema {
+                name: e.name.clone(),
+                url: e.url.clone(),
+                description: e.description.clone(),
+                toml,
+            })
+            .collect();
+        crate::ext::SchemaCatalogResult { loading: false, schemas }
     }
 
     fn status(&mut self, _: ()) -> crate::ext::StatusResult {
@@ -570,5 +626,34 @@ fn apply_changes(text: &mut String, changes: Vec<lsp_types::TextDocumentContentC
             }
             None => *text = change.text,
         }
+    }
+}
+
+pub(crate) fn to_lsp_diagnostic(doc: &Doc, d: toml_ide::Diagnostic) -> lsp_types::Diagnostic {
+    lsp_types::Diagnostic {
+        range: conv::range(&doc.doc, d.range),
+        severity: Some(match d.severity {
+            toml_ide::Severity::Error => lsp_types::DiagnosticSeverity::ERROR,
+            toml_ide::Severity::Warning => lsp_types::DiagnosticSeverity::WARNING,
+            toml_ide::Severity::Information => lsp_types::DiagnosticSeverity::INFORMATION,
+            toml_ide::Severity::Hint => lsp_types::DiagnosticSeverity::HINT,
+        }),
+        code: Some(lsp_types::NumberOrString::String(d.code.to_owned())),
+        source: Some("toml".to_owned()),
+        tags: d.deprecated.then(|| vec![lsp_types::DiagnosticTag::DEPRECATED]),
+        message: d.message,
+        related_information: (!d.related.is_empty()).then(|| {
+            d.related
+                .iter()
+                .map(|(range, message)| lsp_types::DiagnosticRelatedInformation {
+                    location: lsp_types::Location {
+                        uri: doc.uri.clone(),
+                        range: conv::range(&doc.doc, *range),
+                    },
+                    message: message.clone(),
+                })
+                .collect()
+        }),
+        ..Default::default()
     }
 }

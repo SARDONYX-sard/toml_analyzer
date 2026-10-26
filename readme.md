@@ -9,9 +9,15 @@ A language server for TOML with JSON Schema support, and its VS Code extension.
   tables of headers, appending to static arrays, ...
 - JSON Schema validation (drafts 4, 6, 7, 2019-09 and 2020-12), completion of keys,
   table names and values, and hover documentation from the schema
-- In `Cargo.toml`: completion of dependency names, versions and features from
-  crates.io (`toml.cargo.enable`)
-- Formatting, document symbols, folding, semantic highlighting
+- Quick fixes: rename a misspelled key, remove unknown, deprecated or duplicate
+  keys, add missing required keys, replace a value by an allowed one, quote or
+  unquote values, and sort the keys of a table in schema order
+- In `Cargo.toml`: completion of dependency names and features from crates.io
+  (versions with `toml.cargo.versionCompletion`), links to docs.rs on the keys
+  of dependencies, and go to the `Cargo.toml` of `path` dependencies
+- Strings holding paths (`"./src/main.rs"`) open with a click or go to definition
+- Formatting (optionally aligning `=` and comments), document symbols, folding,
+  semantic highlighting
 
 ## Schemas
 
@@ -21,7 +27,10 @@ The schema of a document is, in this order:
 2. a root `"$schema" = "<url or path>"` key;
 3. the `toml.schemas` setting: `{ "<url or path>": ["<glob>", ...] }`;
 4. the `tomlValidation` contributions of installed extensions;
-5. the [SchemaStore](https://www.schemastore.org) catalog (`toml.schemaStore.enable`).
+5. built-in schemas: `clippy.toml` and `.clippy.toml`, generated from the
+   documentation of the Clippy that runs in their directory
+   (`cargo clippy --version`; master for nightly toolchains);
+6. the [SchemaStore](https://www.schemastore.org) catalog (`toml.schemaStore.enable`).
 
 Paths may be absolute or relative to the TOML file (`./schema.json`,
 `../schemas/app.json`); URLs may be `file://`, `http://` or `https://`.

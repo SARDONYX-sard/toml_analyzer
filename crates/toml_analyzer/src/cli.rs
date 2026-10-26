@@ -94,6 +94,7 @@ pub(crate) fn check(args: &[String]) -> i32 {
                 }
                 toml_ide::Severity::Warning => "warning",
                 toml_ide::Severity::Information => "info",
+                toml_ide::Severity::Hint => continue,
             };
             println!(
                 "{file}:{}:{}: {severity}: {} [{}]",
@@ -108,9 +109,13 @@ pub(crate) fn check(args: &[String]) -> i32 {
 }
 
 fn schema_url(doc: &Document, path: &Path) -> Option<Result<String, String>> {
-    let location = toml_ide::schema_location(doc)?;
     let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_owned());
-    let base = url::Url::from_file_path(abs).ok();
+    let Some(location) = toml_ide::schema_location(doc) else {
+        // `clippy.toml` has a built-in schema.
+        let dir = abs.parent().filter(|_| crate::clippy::is_clippy_config(&abs))?;
+        return Some(Ok(crate::clippy::schema_url(dir)));
+    };
+    let base = url::Url::from_file_path(&abs).ok();
     Some(toml_ide::resolve_location(&location.text, base.as_ref()).map(|u| u.to_string()))
 }
 

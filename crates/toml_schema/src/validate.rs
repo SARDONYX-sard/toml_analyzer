@@ -38,6 +38,29 @@ pub struct ValidationError {
     pub message: String,
     /// How bad.
     pub severity: Severity,
+    /// Ways to fix the problem, best first.
+    pub suggestions: Vec<Suggestion>,
+    /// The key is deprecated: editors strike it through.
+    pub deprecated: bool,
+}
+
+/// A fix of a [`ValidationError`], for quick fixes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Suggestion {
+    /// Rename the key, e.g. a typo.
+    RenameKey(String),
+    /// Remove the key and its value.
+    RemoveKey,
+    /// Add missing keys to the table: their name, default value and type.
+    AddKeys(Vec<(String, Option<Value>, Option<String>)>),
+    /// Replace the value.
+    ReplaceValue(Value),
+    /// Write the value as a string: `1` to `"1"`.
+    Quote,
+    /// Write the string as this value: `"1"` to `1`.
+    Unquote(Value),
+    /// Make the value the single item of an array.
+    WrapInArray,
 }
 
 /// Validates the document whose root table is `root` against `schema`.
@@ -93,7 +116,112 @@ fn error(path: &Path, message: String) -> ValidationError {
         target: Target::Value,
         message,
         severity: Severity::Error,
+        suggestions: Vec::new(),
+        deprecated: false,
     }
+}
+
+/// The sentence of a description that mentions the deprecation.
+fn deprecation_sentence(description: &str) -> Option<String> {
+    let flat = description.split_whitespace().collect::<Vec<_>>().join(" ");
+    flat.split_inclusive(". ")
+        .find(|s| {
+            let l = s.to_lowercase();
+            l.contains("deprecat")
+                || l.contains("instead")
+                || l.starts_with("use ")
+                || l.contains("replaced by")
+                || l.contains("renamed to")
+        })
+        .map(|s| {
+            let s = s.trim();
+            // `Deprecated: use x` after "`key` is deprecated: ".
+            let rest = s
+                .get(..11)
+                .filter(|p| p.eq_ignore_ascii_case("deprecated:"))
+                .map_or(s, |_| s[11..].trim());
+            rest.to_owned()
+        })
+}
+
+/// The key that replaces a deprecated one, from `use `x` instead`,
+/// `replaced by `x``, `renamed to `x``, `in favor of `x``...
+fn replacement_key(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    for phrase in
+        ["replaced by", "renamed to", "in favor of", "in favour of", "superseded by", "use"]
+    {
+        let mut from = 0;
+        while let Some(i) = lower[from..].find(phrase) {
+            let after = &text[from + i + phrase.len()..];
+            from += i + phrase.len();
+            let after = after.trim_start();
+            let Some(quote) = after.chars().next().filter(|c| matches!(c, '`' | '"' | '\'')) else {
+                continue;
+            };
+            let inner = &after[1..];
+            let Some(end) = inner.find(quote) else { continue };
+            let key = &inner[..end];
+            // A plain key: not a path, not a value.
+            if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+                return Some(key.to_owned());
+            }
+        }
+    }
+    None
+}
+
+impl ValidationError {
+    fn suggest(mut self, suggestions: impl IntoIterator<Item = Suggestion>) -> ValidationError {
+        self.suggestions.extend(suggestions);
+        self
+    }
+}
+
+/// How a value of the wrong type may be turned into one of `ty`.
+fn type_suggestions(ty: &Value, item: ItemRef<'_>) -> Vec<Suggestion> {
+    let allows = |t: &str| match ty {
+        Value::String(s) => s == t,
+        Value::Array(a) => a.iter().any(|v| v.as_str() == Some(t)),
+        _ => false,
+    };
+    let mut out = Vec::new();
+    if let ItemRef::Value(v) = item {
+        match &v.kind {
+            ValueKind::String(s) => {
+                let parsed = match s.trim() {
+                    "true" if allows("boolean") => Some(Value::Bool(true)),
+                    "false" if allows("boolean") => Some(Value::Bool(false)),
+                    t => t
+                        .parse::<i64>()
+                        .ok()
+                        .filter(|_| allows("integer") || allows("number"))
+                        .map(Value::from)
+                        .or_else(|| {
+                            t.parse::<f64>()
+                                .ok()
+                                .filter(|f| f.is_finite() && allows("number"))
+                                .and_then(serde_json::Number::from_f64)
+                                .map(Value::Number)
+                        }),
+                };
+                out.extend(parsed.map(Suggestion::Unquote));
+            }
+            ValueKind::Integer(_)
+            | ValueKind::Float(_)
+            | ValueKind::Bool(_)
+            | ValueKind::DateTime(..)
+                if allows("string") =>
+            {
+                out.push(Suggestion::Quote);
+            }
+            _ => {}
+        }
+    }
+    if allows("array") && !matches!(item, ItemRef::Array(_)) {
+        out.push(Suggestion::WrapInArray);
+    }
+    out
 }
 
 impl<'r> Validator<'r, '_> {
@@ -156,10 +284,13 @@ impl<'r> Validator<'r, '_> {
         if let Some(ty) = obj.get("type")
             && !matches_type(ty, item)
         {
-            out.push(error(
-                path,
-                format!("expected {}, found {}", describe_type(ty), describe_item(item)),
-            ));
+            out.push(
+                error(
+                    path,
+                    format!("expected {}, found {}", describe_type(ty), describe_item(item)),
+                )
+                .suggest(type_suggestions(ty, item)),
+            );
             // Other keywords would only add noise.
             return eval;
         }
@@ -167,26 +298,48 @@ impl<'r> Validator<'r, '_> {
         if let Some(values) = obj.get("enum").and_then(Value::as_array) {
             let json = to_json(item);
             if !values.iter().any(|v| json_eq(v, &json)) {
-                out.push(error(path, format!("expected one of {}", list_values(values))));
+                let choices = values.iter().take(10).cloned().map(Suggestion::ReplaceValue);
+                out.push(
+                    error(path, format!("expected one of {}", list_values(values)))
+                        .suggest(choices),
+                );
             }
         }
         if let Some(expected) = obj.get("const")
             && !json_eq(expected, &to_json(item))
         {
-            out.push(error(path, format!("expected `{}`", show_value(expected))));
+            out.push(
+                error(path, format!("expected `{}`", show_value(expected)))
+                    .suggest([Suggestion::ReplaceValue(expected.clone())]),
+            );
         }
 
         if obj.get("deprecated").and_then(Value::as_bool) == Some(true) && !path.is_empty() {
             let mut message = format!("`{}` is deprecated", display_path(path));
-            if let Some(d) = obj.get("description").and_then(Value::as_str) {
+            // `deprecationMessage` (VS Code), else what the description says
+            // about the deprecation; not its first line, which describes the
+            // key.
+            let explanation = obj
+                .get("deprecationMessage")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| {
+                    obj.get("description").and_then(Value::as_str).and_then(deprecation_sentence)
+                });
+            let mut suggestions = Vec::new();
+            if let Some(e) = &explanation {
                 message.push_str(": ");
-                message.push_str(d.lines().next().unwrap_or(d));
+                message.push_str(e);
+                suggestions.extend(replacement_key(e).map(Suggestion::RenameKey));
             }
+            suggestions.push(Suggestion::RemoveKey);
             out.push(ValidationError {
                 path: path.clone(),
                 target: Target::Key,
                 message,
                 severity: Severity::Warning,
+                suggestions,
+                deprecated: true,
             });
         }
 
@@ -612,7 +765,17 @@ impl<'r> Validator<'r, '_> {
             if !missing.is_empty() {
                 let list: Vec<String> = missing.iter().map(|k| format!("`{k}`")).collect();
                 let s = if missing.len() > 1 { "s" } else { "" };
-                out.push(error(path, format!("missing required key{s} {}", list.join(", "))));
+                let keys = missing
+                    .iter()
+                    .map(|k| {
+                        let (default, ty) = self.property_hint(schema, k);
+                        ((*k).to_owned(), default, ty)
+                    })
+                    .collect();
+                out.push(
+                    error(path, format!("missing required key{s} {}", list.join(", ")))
+                        .suggest([Suggestion::AddKeys(keys)]),
+                );
             }
         }
         if let Some(deps) = obj.get("dependentRequired").and_then(Value::as_object) {
@@ -668,6 +831,8 @@ impl<'r> Validator<'r, '_> {
                         target: Target::Key,
                         message: format!("invalid key: {}", e.message),
                         severity: e.severity,
+                        suggestions: Vec::new(),
+                        deprecated: false,
                     });
                 }
                 path.pop();
@@ -744,18 +909,53 @@ impl<'r> Validator<'r, '_> {
                 .get("properties")
                 .and_then(Value::as_object)
                 .map_or(Vec::new(), |p| p.keys().map(String::as_str).collect());
+            let mut suggestions = Vec::new();
             if let Some(similar) = closest(key, &known) {
                 message.push_str(&format!(", did you mean `{similar}`?"));
+                suggestions.push(Suggestion::RenameKey(similar.to_owned()));
             }
+            suggestions.push(Suggestion::RemoveKey);
             out.push(ValidationError {
                 path: path.clone(),
                 target: Target::Key,
                 message,
                 severity: Severity::Error,
+                suggestions,
+                deprecated: false,
             });
         } else {
             self.validate(&schema.child(additional), child, path, out, depth + 1);
         }
+    }
+
+    /// The `default` and `type` of the property `key` of `schema`, for a
+    /// placeholder value.
+    fn property_hint(&self, schema: &SchemaRef<'r>, key: &str) -> (Option<Value>, Option<String>) {
+        let Some(mut sub) =
+            schema.get("properties").and_then(|p| p.get(key)).map(|s| schema.child(s))
+        else {
+            return (None, None);
+        };
+        for _ in 0..8 {
+            let default = sub.get("default").cloned();
+            let ty = match sub.get("type") {
+                Some(Value::String(t)) => Some(t.clone()),
+                Some(Value::Array(ts)) => ts.iter().find_map(Value::as_str).map(str::to_owned),
+                _ => None,
+            };
+            if default.is_some() || ty.is_some() {
+                return (default, ty);
+            }
+            let Some(target) = sub
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|r| self.registry.resolve(&sub.base, r))
+            else {
+                break;
+            };
+            sub = target;
+        }
+        (None, None)
     }
 }
 

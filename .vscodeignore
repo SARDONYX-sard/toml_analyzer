@@ -6,6 +6,7 @@
 !LICENSE-*
 !language-configuration.json
 !syntaxes/**
+!resources/**
 
 # The bundled extension (see extension/vite.config.ts) and the server binary (see `node tasks.cjs build`).
 !build/extension.cjs

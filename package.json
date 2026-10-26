@@ -5,6 +5,11 @@
   "version": "0.0.1",
   "publisher": "SARDONYX",
   "license": "MIT OR Apache-2.0",
+  "icon": "resources/icon.png",
+  "galleryBanner": {
+    "color": "#1e2533",
+    "theme": "dark"
+  },
   "type": "module",
   "repository": {
     "type": "git",
@@ -18,9 +23,7 @@
     "Formatters",
     "Linters"
   ],
-  "activationEvents": [
-    "onLanguage:toml"
-  ],
+  "activationEvents": [],
   "main": "build/extension.cjs",
   "contributes": {
     "languages": [
@@ -40,7 +43,11 @@
           "uv.lock",
           "pdm.lock"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./resources/toml.svg",
+          "dark": "./resources/toml.svg"
+        }
       }
     ],
     "grammars": [
@@ -97,12 +104,16 @@
         "toml.schemas": {
           "type": "object",
           "default": {},
-          "markdownDescription": "Schemas and the files they apply to: `{ \"<url or path>\": [\"<glob>\", ...] }`. Paths are relative to the first workspace folder; a glob without `/` matches file names. A `#:schema` comment or a `\"$schema\"` key in the file wins.",
+          "markdownDescription": "Schemas and the files they apply to: `{ \"<url or path>\": [\"<glob>\", ...] }`.\n\n- **Schema**: a URL (`https://`, `file://`) or a path, absolute or relative to the first workspace folder (`./schemas/app.json`). `\"none\"` disables the schema of the files.\n- **Globs**: one without `/` matches file names in any directory (`Cargo.toml`); one with `/` is a path relative to the first workspace folder (`./Cargo.toml` is that file only, `config/*.toml`), unless it starts with `**` or is absolute.\n- **Order**: the first matching glob wins, in the order of the keys.\n- **Precedence**: a `#:schema` comment or a `\"$schema\"` key in the file wins over this setting, which wins over the `tomlValidation` of extensions, the built-in schemas (`clippy.toml`) and the SchemaStore catalog.\n\nThe status bar item writes this setting: `Use another schema…` and `Use no schema…` move the chosen glob to the chosen schema (removing it from the others), `Reset to automatic` removes it.\n\n```json\n\"toml.schemas\": {\n  \"./schemas/app.json\": [\"config/*.toml\"],\n  \"none\": [\"./sub/Cargo.toml\"]\n}\n```",
           "additionalProperties": {
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "markdownDescription": "Globs of the files: without `/` a file name, else a path relative to the first workspace folder."
+          },
+          "propertyNames": {
+            "markdownDescription": "A schema URL or path, or `none`."
           }
         },
         "toml.schemaStore.enable": {
@@ -140,6 +151,11 @@
           "default": true,
           "markdownDescription": "In `Cargo.toml`, complete the names, versions and features of dependencies from crates.io."
         },
+        "toml.cargo.versionCompletion": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "In `Cargo.toml`, also complete the versions of dependencies. Off by default: extensions such as crates or Dependi do it."
+        },
         "toml.formatter.maxBlankLines": {
           "type": "number",
           "default": 2,
@@ -149,6 +165,16 @@
           "type": "boolean",
           "default": false,
           "description": "Indent the entries of tables by their depth."
+        },
+        "toml.formatter.alignEntries": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Align the `=` of entries on consecutive lines of a table."
+        },
+        "toml.formatter.alignComments": {
+          "type": "boolean",
+          "default": false,
+          "description": "Align the comments ending consecutive lines."
         },
         "toml.formatter.crlf": {
           "type": "boolean",

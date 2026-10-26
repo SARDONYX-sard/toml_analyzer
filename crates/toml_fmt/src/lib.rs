@@ -13,6 +13,7 @@
 //!
 //! Documents with syntax errors are not formatted.
 
+mod align;
 #[cfg(test)]
 mod tests;
 
@@ -29,11 +30,22 @@ pub struct Options {
     pub indent_tables: bool,
     /// Use `\r\n` line breaks.
     pub crlf: bool,
+    /// Align the `=` of consecutive entries.
+    pub align_entries: bool,
+    /// Align the comments ending consecutive lines.
+    pub align_comments: bool,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { indent: "  ".to_owned(), max_blank_lines: 2, indent_tables: false, crlf: false }
+        Options {
+            indent: "  ".to_owned(),
+            max_blank_lines: 2,
+            indent_tables: false,
+            crlf: false,
+            align_entries: false,
+            align_comments: false,
+        }
     }
 }
 
@@ -48,6 +60,12 @@ pub fn format(text: &str, options: &Options) -> Option<String> {
     f.container(parse.syntax_node());
     let mut out = f.out.trim_end().to_owned();
     out.push('\n');
+    if options.align_entries {
+        out = align::entries(&out);
+    }
+    if options.align_comments {
+        out = align::comments(&out);
+    }
     if options.crlf {
         out = out.replace('\n', "\r\n");
     }

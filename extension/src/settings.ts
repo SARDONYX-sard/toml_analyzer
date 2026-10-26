@@ -51,11 +51,16 @@ export function settings(context: vscode.ExtensionContext): Record<string, unkno
       cacheMaxAge: config.get<number>("schema.cacheMaxAge", 86400),
     },
     validation: { enable: config.get<boolean>("validation.enable", true) },
-    cargo: { enable: config.get<boolean>("cargo.enable", true) },
+    cargo: {
+      enable: config.get<boolean>("cargo.enable", true),
+      versionCompletion: config.get<boolean>("cargo.versionCompletion", false),
+    },
     formatter: {
       maxBlankLines: config.get<number>("formatter.maxBlankLines", 2),
       indentTables: config.get<boolean>("formatter.indentTables", false),
       crlf: config.get<boolean>("formatter.crlf", false),
+      alignEntries: config.get<boolean>("formatter.alignEntries", false),
+      alignComments: config.get<boolean>("formatter.alignComments", false),
     },
   };
 }

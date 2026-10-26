@@ -76,6 +76,9 @@ pub(crate) struct Config {
     pub(crate) validate: bool,
     /// Complete the dependencies of `Cargo.toml` from crates.io.
     pub(crate) cargo: bool,
+    /// Complete the versions of dependencies too: off by default, other
+    /// extensions do it.
+    pub(crate) cargo_versions: bool,
     /// Formatting.
     pub(crate) format: toml_fmt::Options,
 }
@@ -92,6 +95,7 @@ impl Default for Config {
             cache_max_age: Duration::from_secs(24 * 60 * 60),
             validate: true,
             cargo: true,
+            cargo_versions: false,
             format: toml_fmt::Options::default(),
         }
     }
@@ -136,6 +140,9 @@ impl Config {
         if let Some(b) = get("/cargo/enable").and_then(Value::as_bool) {
             config.cargo = b;
         }
+        if let Some(b) = get("/cargo/versionCompletion").and_then(Value::as_bool) {
+            config.cargo_versions = b;
+        }
         let f = &mut config.format;
         if let Some(n) = get("/formatter/indentWidth").and_then(Value::as_u64) {
             f.indent = " ".repeat(n.min(16) as usize);
@@ -148,6 +155,12 @@ impl Config {
         }
         if let Some(b) = get("/formatter/indentTables").and_then(Value::as_bool) {
             f.indent_tables = b;
+        }
+        if let Some(b) = get("/formatter/alignEntries").and_then(Value::as_bool) {
+            f.align_entries = b;
+        }
+        if let Some(b) = get("/formatter/alignComments").and_then(Value::as_bool) {
+            f.align_comments = b;
         }
         if let Some(b) = get("/formatter/crlf").and_then(Value::as_bool) {
             f.crlf = b;

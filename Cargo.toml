@@ -47,7 +47,7 @@ expect-test = "1.5.1"
 globset = "0.4.18"
 regex = "1.12.3"
 rustc-hash = "2.1.1"
-serde_json = "1.0.149"
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
 text-size = "1.1.1"
 url = "2.5.8"
 
