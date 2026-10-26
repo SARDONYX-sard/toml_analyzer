@@ -218,6 +218,7 @@
     "release:minor": "node ./tasks.cjs release minor",
     "release:patch": "node ./tasks.cjs release patch",
     "package": "npm run build:server && node ./tasks.cjs build --vsix",
+    "tag": "node ./tasks.cjs tag",
     "check": "tsc -p ./extension",
     "compile:debug": "vite build --config extension/vite.config.ts --mode development",
     "debug": "npm run compile:debug && cargo build && node ./tasks.cjs build --profile debug"
