@@ -129,7 +129,73 @@ function icon(args) {
   console.log(`rendered ${out}`);
 }
 
+/** The manifest of the server crate, whose version is the release version. */
+const CRATE_MANIFEST = path.join(__dirname, "crates", "toml_analyzer", "Cargo.toml");
+
+/** `[major, minor, patch]` of a `x.y.z` version. */
+const parseVersion = (v) => {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
+  if (!m) throw new Error(`not a x.y.z version: ${v}`);
+  return m.slice(1).map(Number);
+};
+const compareVersions = (a, b) => {
+  const [x, y] = [parseVersion(a), parseVersion(b)];
+  return x[0] - y[0] || x[1] - y[1] || x[2] - y[2];
+};
+
+/**
+ * Bumps the version of the extension (package.json, package-lock.json) and
+ * of the server crate (crates/toml_analyzer/Cargo.toml) to the same new
+ * version, updates only the workspace crates in Cargo.lock, then makes a
+ * signed commit and a signed tag of the new version. Nothing is pushed.
+ */
+function release(args) {
+  const level = args[0];
+  if (!["major", "minor", "patch"].includes(level)) throw new Error("usage: node tasks.cjs release <major|minor|patch>");
+  const files = ["package.json", "package-lock.json", "crates/toml_analyzer/Cargo.toml", "Cargo.lock"];
+  // Only these files are committed: they must not hold other changes.
+  const dirty = git("status", "--porcelain", "--", ...files);
+  if (dirty) throw new Error(`commit or stash the changes of these files first:\n${dirty}`);
+
+  const npmVersion = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version;
+  const manifest = fs.readFileSync(CRATE_MANIFEST, "utf8");
+  const crateLine = /^version\s*=\s*"([^"]+)"/m;
+  const crateVersion = crateLine.exec(manifest)?.[1];
+  if (!crateVersion) throw new Error(`no version in ${CRATE_MANIFEST}`);
+  // The two are released together; the newer one counts.
+  const old = compareVersions(npmVersion, crateVersion) >= 0 ? npmVersion : crateVersion;
+  const [major, minor, patch] = parseVersion(old);
+  const next = {
+    major: `${major + 1}.0.0`,
+    minor: `${major}.${minor + 1}.0`,
+    patch: `${major}.${minor}.${patch + 1}`,
+  }[level];
+  if (git("tag", "--list", next)) throw new Error(`the tag ${next} exists already`);
+  console.log(`${old} -> ${next} (package.json ${npmVersion}, crate ${crateVersion})`);
+
+  // package.json and package-lock.json, without npm's own commit and tag.
+  run(`npm version ${next} --no-git-tag-version --allow-same-version`);
+  fs.writeFileSync(CRATE_MANIFEST, manifest.replace(crateLine, `version = "${next}"`));
+  // Only the workspace members: the versions of the dependencies stay.
+  run("cargo update --workspace");
+
+  git("add", "--", ...files);
+  const message = `build: bump up to ${old} -> ${next}`;
+  git("commit", "-S", "-m", message);
+  // `-s` signs tags (`-S` is the switch of `git commit` only).
+  git("tag", "-s", "-m", message, next);
+  console.log(`committed and tagged ${next}; push with: git push origin HEAD ${next}`);
+}
+
 const TASKS = {
+  release: {
+    usage: "<major|minor|patch>",
+    help: `Bumps the version of package.json and of the toml_analyzer crate (the newer of
+the two, so that they agree), updates the workspace crates in Cargo.lock, and
+makes a signed commit "build: bump up to <old> -> <new>" and a signed tag <new>
+with the same message. Nothing is pushed.`,
+    run: release,
+  },
   icon: {
     usage: "[--size <px>] [--browser <path>]",
     help: `Renders resources/icon.svg into resources/icon.png with a headless Edge or Chrome.
