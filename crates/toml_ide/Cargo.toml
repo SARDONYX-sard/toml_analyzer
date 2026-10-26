@@ -1,0 +1,23 @@
+[package]
+name = "toml_ide"
+version = "0.0.0"
+description = "Editor features for TOML: diagnostics, completion, hover, ..."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+toml_dom.workspace = true
+toml_lexer.workspace = true
+toml_parser.workspace = true
+toml_schema.workspace = true
+
+serde_json.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+expect-test.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,8 @@
+# Text files use LF everywhere, so that tests comparing text (formatter
+# fixtures) behave the same on every OS.
+* text=auto eol=lf
+
+# Binary
+*.png binary
+*.ico binary
+*.vsix binary

@@ -1,0 +1,191 @@
+{
+  "name": "toml-analyzer",
+  "displayName": "TOML Analyzer",
+  "description": "TOML language support with JSON Schema: validation, completion, hover, formatting and more.",
+  "version": "0.0.1",
+  "publisher": "SARDONYX",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SARDONYX-sard/toml_analyzer"
+  },
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Formatters",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:toml"
+  ],
+  "main": "build/extension.cjs",
+  "contributes": {
+    "languages": [
+      {
+        "id": "toml",
+        "aliases": [
+          "TOML",
+          "toml"
+        ],
+        "extensions": [
+          ".toml"
+        ],
+        "filenames": [
+          "Cargo.lock",
+          "Pipfile",
+          "poetry.lock",
+          "uv.lock",
+          "pdm.lock"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "toml",
+        "scopeName": "source.toml",
+        "path": "./syntaxes/toml.tmLanguage.json"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "toml",
+        "scopes": {
+          "namespace": [
+            "entity.name.section.toml"
+          ],
+          "property": [
+            "support.type.property-name.toml"
+          ],
+          "regexp": [
+            "constant.other.time.toml"
+          ],
+          "macro": [
+            "keyword.control.directive.toml"
+          ]
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "toml.clearSchemaCache",
+        "title": "Clear Schema Cache",
+        "category": "TOML"
+      },
+      {
+        "command": "toml.restartServer",
+        "title": "Restart Language Server",
+        "category": "TOML"
+      },
+      {
+        "command": "toml.showStatus",
+        "title": "Show Status",
+        "category": "TOML"
+      },
+      {
+        "command": "toml.schemaActions",
+        "title": "Schema Actions",
+        "category": "TOML"
+      }
+    ],
+    "configuration": {
+      "title": "TOML Analyzer",
+      "properties": {
+        "toml.schemas": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Schemas and the files they apply to: `{ \"<url or path>\": [\"<glob>\", ...] }`. Paths are relative to the first workspace folder; a glob without `/` matches file names. A `#:schema` comment or a `\"$schema\"` key in the file wins.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "toml.schemaStore.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use the SchemaStore catalog for files without a schema."
+        },
+        "toml.schemaStore.url": {
+          "type": "string",
+          "default": "https://www.schemastore.org/api/json/catalog.json",
+          "description": "The URL of the schema catalog."
+        },
+        "toml.schema.cache": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Keep schemas fetched over HTTP on disk. Local schema files are never cached: they are read again whenever they change. Use `TOML: Clear Schema Cache` to fetch everything again."
+        },
+        "toml.schema.cacheDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Where schemas fetched over HTTP are cached. Empty: the storage of the extension."
+        },
+        "toml.schema.cacheMaxAge": {
+          "type": "number",
+          "default": 86400,
+          "description": "Cached schemas older than this many seconds are fetched again."
+        },
+        "toml.validation.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate documents against their JSON Schema."
+        },
+        "toml.cargo.enable": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "In `Cargo.toml`, complete the names, versions and features of dependencies from crates.io."
+        },
+        "toml.formatter.maxBlankLines": {
+          "type": "number",
+          "default": 2,
+          "description": "Blank lines allowed in a row."
+        },
+        "toml.formatter.indentTables": {
+          "type": "boolean",
+          "default": false,
+          "description": "Indent the entries of tables by their depth."
+        },
+        "toml.formatter.crlf": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use CRLF line breaks."
+        },
+        "toml.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "The language server executable. Empty: the bundled one."
+        },
+        "toml.server.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra command line arguments of the language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "vite build --config extension/vite.config.ts",
+    "build:server": "cargo build --release",
+    "release": "npm run compile && npm run build:server && node ./tasks.cjs build",
+    "package": "npm run build:server && node ./tasks.cjs build --vsix",
+    "check": "tsc -p ./extension",
+    "compile:debug": "vite build --config extension/vite.config.ts --mode development",
+    "debug": "npm run compile:debug && cargo build && node ./tasks.cjs build --profile debug"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/vscode": "^1.125.0",
+    "@vscode/vsce": "^4.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vscode-languageclient": "^10.1.0"
+  }
+}

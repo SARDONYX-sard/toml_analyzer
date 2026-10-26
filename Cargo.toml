@@ -1,0 +1,92 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/toml_analyzer"]
+
+[workspace.package]
+authors = ["SARDONYX"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/SARDONYX-sard/toml_analyzer"
+rust-version = "1.96"
+
+[profile.dev]
+debug = 1
+
+[profile.dev.package]
+# These speed up local tests.
+rustc-hash.opt-level = 3
+text-size.opt-level = 3
+serde.opt-level = 3
+serde_json.opt-level = 3
+regex.opt-level = 3
+
+[profile.release]
+# Set this to 1 or 2 to get more useful backtraces in debugger.
+debug = 0
+
+# Used by the release workflow.
+[profile.release-lto]
+inherits = "release"
+lto = true
+codegen-units = 1
+
+[workspace.dependencies]
+# local crates
+toml_dom = { path = "./crates/toml_dom", version = "0.0.0" }
+toml_fmt = { path = "./crates/toml_fmt", version = "0.0.0" }
+toml_ide = { path = "./crates/toml_ide", version = "0.0.0" }
+toml_lexer = { path = "./crates/toml_lexer", version = "0.0.0" }
+toml_parser = { path = "./crates/toml_parser", version = "0.0.0" }
+toml_schema = { path = "./crates/toml_schema", version = "0.0.0" }
+
+# non-local crates
+anyhow = "1.0.98"
+crossbeam-channel = "0.5.15"
+expect-test = "1.5.1"
+globset = "0.4.18"
+regex = "1.12.3"
+rustc-hash = "2.1.1"
+serde_json = "1.0.149"
+text-size = "1.1.1"
+url = "2.5.8"
+
+[workspace.lints.rust]
+elided_lifetimes_in_paths = "warn"
+explicit_outlives_requirements = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_extern_crates = "warn"
+unused_lifetimes = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+## lint groups
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+restriction = { level = "allow", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+## allow following lints
+too_long_first_doc_paragraph = "allow"
+# subjective
+single_match = "allow"
+# () makes a fine error in most cases
+result_unit_err = "allow"
+# We don't expose public APIs that matter like this
+len_without_is_empty = "allow"
+enum_variant_names = "allow"
+new_ret_no_self = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+## warn at following lints
+# CI raises these to deny
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+rc_buffer = "warn"
+str_to_string = "warn"

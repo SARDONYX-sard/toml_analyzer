@@ -1,0 +1,13 @@
+# Ignore everything, then list what goes into the VSIX.
+**/**
+
+!package.json
+!readme.md
+!LICENSE-*
+!language-configuration.json
+!syntaxes/**
+
+# The bundled extension (see extension/vite.config.ts) and the server binary (see `node tasks.cjs build`).
+!build/extension.cjs
+!build/toml_analyzer
+!build/toml_analyzer.exe

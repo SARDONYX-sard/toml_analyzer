@@ -1,0 +1,23 @@
+[package]
+name = "toml_schema"
+version = "0.0.0"
+description = "JSON Schema validation of TOML documents."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+toml_dom.workspace = true
+
+regex.workspace = true
+rustc-hash.workspace = true
+serde_json.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+expect-test.workspace = true
+toml_parser.workspace = true
+
+[lints]
+workspace = true

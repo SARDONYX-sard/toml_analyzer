@@ -1,0 +1,17 @@
+[package]
+name = "toml_fmt"
+version = "0.0.0"
+description = "Formatter for TOML."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+toml_parser.workspace = true
+
+[dev-dependencies]
+expect-test.workspace = true
+
+[lints]
+workspace = true
