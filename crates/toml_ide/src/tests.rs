@@ -482,3 +482,39 @@ fn cargo_dependency_range_fixes() {
         crate::cargo_dependency_fixes(&doc, first_two).into_iter().map(|f| f.title).collect();
     assert_eq!(titles, ["Convert to `{ version = \"1\" }`", "Convert to `\"2\"`"]);
 }
+
+#[test]
+fn cargo_workspace_inheritance() {
+    let root = Document::new(
+        "[workspace.package]\nauthors = [\"SARDONYX\"]\n\n[workspace.dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n\n[workspace.lints.rust]\nunsafe_code = \"deny\"\n",
+    );
+    let hover = |src: &str| {
+        let (doc, offset) = cursor(src);
+        crate::cargo_workspace_ref(&doc, offset).map(|r| crate::cargo_workspace_hover(&r, &root))
+    };
+    assert_eq!(
+        hover("[package]\nauth$0ors.workspace = true\n").unwrap(),
+        "From `[workspace.package]` of the workspace:\n\n```toml\nauthors = [\"SARDONYX\"]\n```"
+    );
+    // On `workspace`, on `true`, and the table form.
+    assert!(hover("[package]\nauthors.work$0space = true\n").is_some());
+    assert!(hover("[package]\nauthors.workspace = tr$0ue\n").is_some());
+    assert!(hover("[package]\nauthors = { workspace = t$0rue }\n").is_some());
+    assert_eq!(
+        hover("[dev-dependencies]\nse$0rde.workspace = true\n").unwrap(),
+        "From `[workspace.dependencies]` of the workspace:\n\n```toml\nserde = { version = \"1\", features = [\"derive\"] }\n```"
+    );
+    assert_eq!(
+        hover("[lints]\nwork$0space = true\n").unwrap(),
+        "From `[workspace.lints]` of the workspace:\n\n```toml\n[workspace.lints.rust]\nunsafe_code = \"deny\"\n```"
+    );
+    assert_eq!(
+        hover("[package]\nlic$0ense.workspace = true\n").unwrap(),
+        "`license` is not defined in `[workspace.package]` of the workspace"
+    );
+    assert!(hover("[package]\nna$0me = \"x\"\n").is_none());
+    // Go to definition: the key in the root.
+    let (doc, offset) = cursor("[dependencies]\nse$0rde.workspace = true\n");
+    let r = crate::cargo_workspace_ref(&doc, offset).unwrap();
+    assert_eq!(&root.text[root.locate(&r.target, true)], "serde");
+}

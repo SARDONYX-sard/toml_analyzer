@@ -730,3 +730,87 @@ pub fn cargo_dependency_fixes(doc: &Document, range: TextRange) -> Vec<crate::Fi
     }
     out
 }
+
+/// An inheritance from the workspace (`authors.workspace = true`,
+/// `serde.workspace = true`, `[lints] workspace = true`) under the cursor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceRef {
+    /// The key or value hovered.
+    pub range: TextRange,
+    /// What is inherited, in the root `Cargo.toml`: `workspace.package.authors`,
+    /// `workspace.dependencies.serde` or `workspace.lints`.
+    pub target: Path,
+}
+
+/// The inheritance from the workspace at `offset` in a `Cargo.toml`.
+pub fn cargo_workspace_ref(doc: &Document, offset: TextSize) -> Option<WorkspaceRef> {
+    let position = position_at(doc, offset);
+    let (path, range) = match &position.kind {
+        PositionKind::Key { range, segment: Some(_), .. } => (position.key_path()?, *range),
+        PositionKind::Value { range } if !range.is_empty() => (position.path.clone(), *range),
+        _ => return None,
+    };
+    let is_true = |p: &[PathSegment]| matches!(doc.dom.get(p), Some(Item::Value(v)) if matches!(v.kind, ValueKind::Bool(true)));
+    // The table holding `workspace = true`.
+    let inherits = if matches!(path.last(), Some(PathSegment::Key(k)) if k == "workspace") {
+        path[..path.len() - 1].to_vec()
+    } else {
+        path.clone()
+    };
+    if inherits.is_empty() || !is_true(&with(&inherits, "workspace")) {
+        return None;
+    }
+    let key = |k: &str| PathSegment::Key(k.to_owned());
+    let target = match inherits.as_slice() {
+        [PathSegment::Key(p), field] if p == "package" => {
+            vec![key("workspace"), key("package"), field.clone()]
+        }
+        [PathSegment::Key(l)] if l == "lints" => vec![key("workspace"), key("lints")],
+        _ => {
+            let table = dependency_table(&inherits)?;
+            if inherits.len() != table + 1 {
+                return None;
+            }
+            vec![key("workspace"), key("dependencies"), inherits[table].clone()]
+        }
+    };
+    Some(WorkspaceRef { range, target })
+}
+
+/// The hover of an inheritance: the inherited value in the root
+/// `Cargo.toml` (`root`).
+pub fn cargo_workspace_hover(reference: &WorkspaceRef, root: &Document) -> String {
+    let target = &reference.target;
+    let (table, name) = target.split_at(target.len().saturating_sub(1));
+    let table = toml_dom::display_path(table);
+    let name = toml_dom::display_path(name);
+    // `[workspace.lints]` as a whole.
+    let section = if target.len() == 2 { toml_dom::display_path(target) } else { table.clone() };
+    match root.dom.get(target) {
+        None => format!("`{name}` is not defined in `[{section}]` of the workspace"),
+        Some(item) => {
+            let code = match item {
+                // Written in header sections: shown as they are written.
+                Item::Table(t) if t.kind != toml_dom::TableKind::Inline => {
+                    let sections: Vec<&str> = root
+                        .dom
+                        .table_paths
+                        .iter()
+                        .filter(|(_, p)| p.starts_with(target))
+                        .map(|(range, _)| root.text[*range].trim_end())
+                        .collect();
+                    let text = sections.join("\n\n");
+                    // Long sections are cut.
+                    let lines: Vec<&str> = text.lines().collect();
+                    if lines.len() > 40 {
+                        format!("{}\n# ...", lines[..40].join("\n"))
+                    } else {
+                        text
+                    }
+                }
+                _ => format!("{name} = {}", &root.text[item.range()]),
+            };
+            format!("From `[{section}]` of the workspace:\n\n```toml\n{code}\n```")
+        }
+    }
+}

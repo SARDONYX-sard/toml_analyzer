@@ -33,7 +33,22 @@ impl Server {
         let offset = conv::offset(doc, p.position);
         let schema = url.as_deref().map(|url| Schema { registry: &self.schemas.registry, url });
         let from_schema = toml_ide::hover(doc, offset, schema);
-        let dependency = cargo.then(|| toml_ide::cargo_hover_context(doc, offset)).flatten();
+        let mut dependency = cargo.then(|| toml_ide::cargo_hover_context(doc, offset)).flatten();
+        let inherited = self.workspace_ref(&p.text_document.uri, offset);
+        // `serde.workspace = true`: the version of the workspace.
+        if let (Some(dep), Some((r, _, root))) = (&mut dependency, &inherited)
+            && dep.requirement.is_none()
+        {
+            let version = toml_ide::PathSegment::Key("version".to_owned());
+            let string = |path: &[toml_ide::PathSegment]| match root.dom.get(path) {
+                Some(toml_dom_item) => toml_dom_item.to_json().as_str().map(str::to_owned),
+                None => None,
+            };
+            let mut with_version = r.target.clone();
+            with_version.push(version);
+            dep.requirement = string(&r.target).or_else(|| string(&with_version));
+        }
+        let doc = &self.doc(&p.text_document.uri).ok()?.doc;
         let (markdown, range) = match (dependency, from_schema) {
             (Some(dep), Some(h)) => (
                 format!("{}\n\n---\n\n{}", toml_ide::cargo_hover_markdown(&dep), h.markdown),
@@ -41,7 +56,19 @@ impl Server {
             ),
             (Some(dep), None) => (toml_ide::cargo_hover_markdown(&dep), dep.range),
             (None, Some(h)) => (h.markdown, h.range),
-            (None, None) => return None,
+            (None, None) => match &inherited {
+                Some((r, _, _)) => (String::new(), r.range),
+                None => return None,
+            },
+        };
+        let (markdown, range) = match &inherited {
+            Some((r, _, root)) => {
+                let from = toml_ide::cargo_workspace_hover(r, root);
+                let markdown =
+                    if markdown.is_empty() { from } else { format!("{from}\n\n---\n\n{markdown}") };
+                (markdown, r.range)
+            }
+            None => (markdown, range),
         };
         Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
@@ -274,6 +301,14 @@ impl Server {
                 Err(()) => None,
             };
         }
+        // `authors.workspace = true`: the definition in the root manifest.
+        if let Some((reference, path, root)) = self.workspace_ref(uri, offset) {
+            let range = root.locate(&reference.target, true);
+            return Some(GotoDefinitionResponse::Scalar(lsp_types::Location {
+                uri: conv::path_to_uri(&path)?,
+                range: conv::range(&root, range),
+            }));
+        }
         let doc = self.doc(uri).ok()?;
         // The key of a `path` dependency: its manifest.
         if self.config.cargo
@@ -484,10 +519,36 @@ impl Server {
         )
     }
 
+    /// The `Cargo.toml` with a `[workspace]` in `dir` or above, and its path.
+    pub(crate) fn workspace_root_at(
+        &self,
+        dir: &std::path::Path,
+    ) -> Option<(std::path::PathBuf, Document)> {
+        dir.ancestors().find_map(|d| {
+            let path = d.join("Cargo.toml");
+            let manifest = self.read_manifest(&path)?;
+            manifest.dom.root.get("workspace").is_some().then_some((path, manifest))
+        })
+    }
+
     /// The `Cargo.toml` with a `[workspace]` in `dir` or above.
     pub(crate) fn workspace_root(&self, dir: &std::path::Path) -> Option<Document> {
-        dir.ancestors()
-            .filter_map(|d| self.read_manifest(&d.join("Cargo.toml")))
-            .find(|m| m.dom.root.get("workspace").is_some())
+        self.workspace_root_at(dir).map(|(_, d)| d)
+    }
+
+    /// The inheritance from the workspace at `offset` of `uri`, with the root
+    /// manifest.
+    fn workspace_ref(
+        &self,
+        uri: &Uri,
+        offset: toml_ide::TextSize,
+    ) -> Option<(toml_ide::WorkspaceRef, std::path::PathBuf, Document)> {
+        let doc = self.doc(uri).ok()?;
+        if !self.config.cargo || !is_cargo_manifest(doc) {
+            return None;
+        }
+        let reference = toml_ide::cargo_workspace_ref(&doc.doc, offset)?;
+        let (path, root) = self.workspace_root_at(doc.path.as_deref()?.parent()?)?;
+        Some((reference, path, root))
     }
 }

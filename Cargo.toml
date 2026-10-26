@@ -15,11 +15,11 @@ debug = 1
 
 [profile.dev.package]
 # These speed up local tests.
+regex.opt-level = 3
 rustc-hash.opt-level = 3
-text-size.opt-level = 3
 serde.opt-level = 3
 serde_json.opt-level = 3
-regex.opt-level = 3
+text-size.opt-level = 3
 
 [profile.release]
 # Set this to 1 or 2 to get more useful backtraces in debugger.
@@ -49,15 +49,15 @@ regex = "1.12.3"
 rustc-hash = "2.1.1"
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 text-size = "1.1.1"
-url = "2.5.8"
+url = { version = "2.5.8" }
 
 [workspace.lints.rust]
 elided_lifetimes_in_paths = "warn"
 explicit_outlives_requirements = "warn"
+unreachable_pub = "warn"
 unsafe_op_in_unsafe_fn = "warn"
 unused_extern_crates = "warn"
 unused_lifetimes = "warn"
-unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 ## lint groups
@@ -68,25 +68,25 @@ restriction = { level = "allow", priority = -1 }
 style = { level = "warn", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 
-## allow following lints
-too_long_first_doc_paragraph = "allow"
-# subjective
-single_match = "allow"
-# () makes a fine error in most cases
-result_unit_err = "allow"
+enum_variant_names = "allow"
 # We don't expose public APIs that matter like this
 len_without_is_empty = "allow"
-enum_variant_names = "allow"
 new_ret_no_self = "allow"
+# () makes a fine error in most cases
+result_unit_err = "allow"
+# subjective
+single_match = "allow"
+## allow following lints
+too_long_first_doc_paragraph = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 
 ## warn at following lints
 # CI raises these to deny
 dbg_macro = "warn"
-todo = "warn"
-print_stdout = "warn"
 print_stderr = "warn"
+print_stdout = "warn"
+todo = "warn"
 
 rc_buffer = "warn"
 str_to_string = "warn"

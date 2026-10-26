@@ -1,11 +1,11 @@
 [package]
 name = "toml_schema"
 version = "0.0.0"
-description = "JSON Schema validation of TOML documents."
 authors.workspace = true
 edition.workspace = true
-license.workspace = true
 rust-version.workspace = true
+description = "JSON Schema validation of TOML documents."
+license.workspace = true
 
 [dependencies]
 toml_dom.workspace = true
