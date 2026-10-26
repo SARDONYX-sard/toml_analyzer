@@ -21,7 +21,7 @@ crossbeam-channel.workspace = true
 env_logger = "0.11"
 globset.workspace = true
 log = "0.4"
-lsp-server = "0.8.0"
+lsp-server = "0.10.0"
 lsp-types = "0.97"
 rustc-hash.workspace = true
 serde = { version = "1", features = ["derive"] }
