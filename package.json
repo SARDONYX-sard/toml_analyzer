@@ -228,6 +228,6 @@
     "@vscode/vsce": "^4.0.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vscode-languageclient": "^10.1.0"
+    "vscode-languageclient": "^11.0.0"
   }
 }
