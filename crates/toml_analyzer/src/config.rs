@@ -79,6 +79,8 @@ pub(crate) struct Config {
     /// Complete the versions of dependencies too: off by default, other
     /// extensions do it.
     pub(crate) cargo_versions: bool,
+    /// How a completed dependency is written.
+    pub(crate) cargo_dependency_style: toml_ide::DependencyStyle,
     /// Formatting.
     pub(crate) format: toml_fmt::Options,
 }
@@ -96,6 +98,7 @@ impl Default for Config {
             validate: true,
             cargo: true,
             cargo_versions: false,
+            cargo_dependency_style: toml_ide::DependencyStyle::Table,
             format: toml_fmt::Options::default(),
         }
     }
@@ -142,6 +145,11 @@ impl Config {
         }
         if let Some(b) = get("/cargo/versionCompletion").and_then(Value::as_bool) {
             config.cargo_versions = b;
+        }
+        match get("/cargo/dependencyStyle").and_then(Value::as_str) {
+            Some("string") => config.cargo_dependency_style = toml_ide::DependencyStyle::String,
+            Some("table") => config.cargo_dependency_style = toml_ide::DependencyStyle::Table,
+            _ => {}
         }
         let f = &mut config.format;
         if let Some(n) = get("/formatter/indentWidth").and_then(Value::as_u64) {

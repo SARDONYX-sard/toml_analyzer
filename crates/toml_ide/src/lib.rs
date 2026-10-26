@@ -31,9 +31,9 @@ pub use toml_schema::{Registry, SchemaRef};
 pub use crate::{
     cargo::{
         CargoContext, CargoHover, CargoQuery, CargoTarget, CrateSummary, CrateVersion,
-        cargo_completions, cargo_context, cargo_docs_links, cargo_hover_context,
-        cargo_hover_markdown, cargo_local_crate, cargo_path_dependency, cargo_sort_fixes,
-        cargo_workspace_locals,
+        DependencyStyle, cargo_completions, cargo_context, cargo_dependency_fixes,
+        cargo_docs_links, cargo_hover_context, cargo_hover_markdown, cargo_local_crate,
+        cargo_path_dependency, cargo_sort_fixes, cargo_workspace_locals,
     },
     completion::{CompletionItem, CompletionKind, completions},
     diagnostics::{Diagnostic, SchemaState, Severity, diagnostics},

@@ -197,12 +197,18 @@ fn cargo_items() {
     ];
     let c = cargo("[dependencies]\nserde = $0\n").unwrap();
     let labels: Vec<String> =
-        cargo_completions(&c, None, Some(&versions)).into_iter().map(|i| i.insert).collect();
+        cargo_completions(&c, None, Some(&versions), crate::DependencyStyle::Table, false)
+            .into_iter()
+            .map(|i| i.insert)
+            .collect();
     assert_eq!(labels, ["\"2.0.0-rc.1\"", "\"1.0.0\"", "\"0.9.0\""]);
     let c = cargo("[dependencies]\nserde = { version = \"1\", features = [\"std\", \"$0\"] }\n")
         .unwrap();
     let labels: Vec<String> =
-        cargo_completions(&c, None, Some(&versions)).into_iter().map(|i| i.label).collect();
+        cargo_completions(&c, None, Some(&versions), crate::DependencyStyle::Table, false)
+            .into_iter()
+            .map(|i| i.label)
+            .collect();
     assert_eq!(labels, ["derive"]);
     assert!(
         crate::cargo::matches_requirement("^0.4", "0.4.9")
@@ -409,4 +415,70 @@ fn sort_alphabetically() {
         crate::sort_alphabetically_fix(&Document::new("[t]\na = 1\nb = 2\n"), TextSize::new(5))
             .is_none()
     );
+}
+
+#[test]
+fn cargo_dependency_styles() {
+    use crate::{CrateSummary, DependencyStyle, cargo_completions};
+    let found = [CrateSummary {
+        name: "serde".to_owned(),
+        version: "1.0.219".to_owned(),
+        description: None,
+    }];
+    let c = cargo("[dependencies]\nser$0\n").unwrap();
+    let insert = |style, snippets| {
+        cargo_completions(&c, Some(&found), None, style, snippets)[0].insert.clone()
+    };
+    assert_eq!(insert(DependencyStyle::Table, true), "serde = { version = \"1.0.219\"$0 }");
+    assert_eq!(insert(DependencyStyle::Table, false), "serde = { version = \"1.0.219\" }");
+    assert_eq!(insert(DependencyStyle::String, true), "serde = \"1.0.219\"");
+
+    let convert = |src: &str| {
+        let (doc, offset) = cursor(src);
+        crate::cargo_dependency_fixes(&doc, toml_parser::TextRange::empty(offset))
+            .into_iter()
+            .map(|f| {
+                let mut text = doc.text.to_string();
+                for (range, new) in f.edits.iter().rev() {
+                    text.replace_range(usize::from(range.start())..usize::from(range.end()), new);
+                }
+                format!("{} => {text:?}", f.title)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        convert("[dependencies]\nse$0rde = \"1.0\"\n"),
+        [
+            "Convert to `{ version = \"1.0\" }` => \"[dependencies]\\nserde = { version = \\\"1.0\\\" }\\n\""
+        ]
+    );
+    assert_eq!(
+        convert("[dependencies]\nserde = { version = \"1$0.0\" }\n"),
+        ["Convert to `\"1.0\"` => \"[dependencies]\\nserde = \\\"1.0\\\"\\n\""]
+    );
+    // Not with other keys than `version`.
+    assert!(convert("[dependencies]\nse$0rde = { version = \"1\", features = [] }\n").is_empty());
+}
+
+#[test]
+fn cargo_dependency_range_fixes() {
+    let src = "[dependencies]\na = \"1\"\nb = { version = \"2\" }\nc = \"3\"\nd = { path = \"d\" }\n\n[dev-dependencies]\ne = \"5\"\n";
+    let doc = Document::new(src);
+    let whole = toml_parser::TextRange::new(TextSize::new(15), TextSize::new(src.len() as u32));
+    let fixes = crate::cargo_dependency_fixes(&doc, whole);
+    let titles: Vec<&str> = fixes.iter().map(|f| f.title.as_str()).collect();
+    assert_eq!(titles, ["Convert 3 dependencies to `{ version = ... }`", "Convert to `\"2\"`"]);
+    let mut text = src.to_owned();
+    for (range, new) in fixes[0].edits.iter().rev() {
+        text.replace_range(usize::from(range.start())..usize::from(range.end()), new);
+    }
+    assert_eq!(
+        text,
+        "[dependencies]\na = { version = \"1\" }\nb = { version = \"2\" }\nc = { version = \"3\" }\nd = { path = \"d\" }\n\n[dev-dependencies]\ne = { version = \"5\" }\n"
+    );
+    // Only the lines selected.
+    let first_two = toml_parser::TextRange::new(TextSize::new(15), TextSize::new(30));
+    let titles: Vec<String> =
+        crate::cargo_dependency_fixes(&doc, first_two).into_iter().map(|f| f.title).collect();
+    assert_eq!(titles, ["Convert to `{ version = \"1\" }`", "Convert to `\"2\"`"]);
 }

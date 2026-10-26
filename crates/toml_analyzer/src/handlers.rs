@@ -92,11 +92,14 @@ impl Server {
         let doc = &doc.doc;
         let offset = conv::offset(doc, p.position);
         let mut items = Vec::new();
+        let style = self.config.cargo_dependency_style;
         if let (Some(context), Some(answer)) = (&context, &answer) {
             items.extend(match answer {
-                Answer::Search(found) => toml_ide::cargo_completions(context, Some(found), None),
+                Answer::Search(found) => {
+                    toml_ide::cargo_completions(context, Some(found), None, style, snippets)
+                }
                 Answer::Versions(versions) => {
-                    toml_ide::cargo_completions(context, None, Some(versions))
+                    toml_ide::cargo_completions(context, None, Some(versions), style, snippets)
                 }
             });
         }
@@ -417,6 +420,7 @@ impl Server {
                 .and_then(|p| self.workspace_root(p.parent()?))
                 .and_then(|w| toml_ide::cargo_workspace_locals(&w))
                 .unwrap_or_default();
+            extra.extend(toml_ide::cargo_dependency_fixes(&doc.doc, range));
             extra.extend(toml_ide::cargo_sort_fixes(&doc.doc, range.start(), &locals));
         }
         for fix in extra {

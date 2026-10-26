@@ -54,6 +54,7 @@ export function settings(context: vscode.ExtensionContext): Record<string, unkno
     cargo: {
       enable: config.get<boolean>("cargo.enable", true),
       versionCompletion: config.get<boolean>("cargo.versionCompletion", false),
+      dependencyStyle: config.get<string>("cargo.dependencyStyle", "table"),
     },
     formatter: {
       maxBlankLines: config.get<number>("formatter.maxBlankLines", 2),

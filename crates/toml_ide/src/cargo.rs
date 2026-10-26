@@ -207,11 +207,25 @@ fn features(doc: &Document, dep: &[PathSegment]) -> Vec<String> {
     }
 }
 
+/// How a completed dependency is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DependencyStyle {
+    /// `serde = { version = "1.0" }`, ready for `features`.
+    #[default]
+    Table,
+    /// `serde = "1.0"`
+    String,
+}
+
 /// The completions of `context`, with the answer of the registry.
+/// `snippets`: whether the editor takes snippets, to leave the cursor
+/// inside `{ version = "..." }`.
 pub fn cargo_completions(
     context: &CargoContext,
     found: Option<&[CrateSummary]>,
     versions: Option<&[CrateVersion]>,
+    style: DependencyStyle,
+    snippets: bool,
 ) -> Vec<CompletionItem> {
     let item =
         |label: String, insert: String, kind, detail, documentation, i: usize| CompletionItem {
@@ -233,10 +247,18 @@ pub fn cargo_completions(
             .iter()
             .enumerate()
             .map(|(i, c)| {
-                let insert = if *header || *has_value {
-                    c.name.clone()
-                } else {
-                    format!("{} = {}", c.name, quote(&c.version))
+                let version = quote(&c.version);
+                let (insert, snippet) = match style {
+                    _ if *header || *has_value => (c.name.clone(), false),
+                    DependencyStyle::String => (format!("{} = {version}", c.name), false),
+                    // The cursor after the version: `, features = [...]` next.
+                    DependencyStyle::Table if snippets => (
+                        format!("{} = {{ version = {}$0 }}", c.name, version.replace('$', "\\$")),
+                        true,
+                    ),
+                    DependencyStyle::Table => {
+                        (format!("{} = {{ version = {version} }}", c.name), false)
+                    }
                 };
                 let mut it = item(
                     c.name.clone(),
@@ -246,6 +268,7 @@ pub fn cargo_completions(
                     c.description.clone(),
                     i,
                 );
+                it.snippet = snippet;
                 it.filter = Some(c.name.clone());
                 it
             })
@@ -619,4 +642,91 @@ pub fn cargo_local_crate(child: &Document, workspace: Option<&Document>) -> Crat
     }
     features.sort_by(|a, b| (a != "default", a).cmp(&(b != "default", b)));
     CrateVersion { version, yanked: false, features }
+}
+
+/// The dependencies of every dependency table: their path and key range.
+fn dependency_entries(doc: &Document) -> Vec<(Path, TextRange)> {
+    let key = |k: &str| PathSegment::Key(k.to_owned());
+    let mut tables: Vec<Path> = DEPENDENCY_TABLES.iter().map(|t| vec![key(t)]).collect();
+    tables.push(vec![key("workspace"), key("dependencies")]);
+    if let Some(Item::Table(targets)) = doc.dom.root.get("target") {
+        for target in targets.entries() {
+            for t in DEPENDENCY_TABLES {
+                tables.push(vec![key("target"), key(&target.key), key(t)]);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for table in tables {
+        let Some(Item::Table(deps)) = doc.dom.get(&table) else { continue };
+        for entry in deps.entries() {
+            out.push((with(&table, &entry.key), entry.key_range));
+        }
+    }
+    out
+}
+
+/// Rewrites dependencies between `dep = "1.0"` and `dep = { version = "1.0" }`
+/// (when the table holds the version only): the one at the cursor for an
+/// empty `range`, else every one the range touches.
+pub fn cargo_dependency_fixes(doc: &Document, range: TextRange) -> Vec<crate::Fix> {
+    let deps: Vec<Path> = if range.is_empty() {
+        let position = position_at(doc, range.start());
+        let path = match &position.kind {
+            PositionKind::Key { segment: Some(_), .. } => position.key_path(),
+            PositionKind::Value { .. } => Some(position.path.clone()),
+            _ => None,
+        };
+        let Some(path) = path else { return Vec::new() };
+        let Some(table) = dependency_table(&path) else { return Vec::new() };
+        if path.len() <= table {
+            return Vec::new();
+        }
+        vec![path[..=table].to_vec()]
+    } else {
+        dependency_entries(doc)
+            .into_iter()
+            .filter(|(dep, key_range)| {
+                let item = doc.dom.get(dep).map_or(*key_range, |i| key_range.cover(i.range()));
+                item.start() <= range.end() && range.start() <= item.end()
+            })
+            .map(|(dep, _)| dep)
+            .collect()
+    };
+
+    let mut to_table: Vec<(TextRange, String)> = Vec::new();
+    let mut to_string: Vec<(TextRange, String)> = Vec::new();
+    for dep in &deps {
+        match doc.dom.get(dep) {
+            Some(Item::Value(v)) => {
+                if let ValueKind::String(s) = &v.kind {
+                    to_table.push((v.range, format!("{{ version = {} }}", quote(s))));
+                }
+            }
+            Some(Item::Table(t)) if t.kind == toml_dom::TableKind::Inline && t.len() == 1 => {
+                if let Some(version) = string_at(doc, &with(dep, "version")) {
+                    to_string.push((t.range, quote(&version)));
+                }
+            }
+            _ => {}
+        }
+    }
+    let fix = |edits: Vec<(TextRange, String)>, one: String, many: &str| {
+        let title = if edits.len() == 1 {
+            one
+        } else {
+            format!("Convert {} dependencies to {many}", edits.len())
+        };
+        crate::Fix { title, edits, preferred: false }
+    };
+    let mut out = Vec::new();
+    if let Some((_, text)) = to_table.first() {
+        let one = format!("Convert to `{text}`");
+        out.push(fix(to_table, one, "`{ version = ... }`"));
+    }
+    if let Some((_, text)) = to_string.first() {
+        let one = format!("Convert to `{text}`");
+        out.push(fix(to_string, one, "`\"...\"`"));
+    }
+    out
 }

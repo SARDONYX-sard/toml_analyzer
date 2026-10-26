@@ -151,6 +151,19 @@
           "default": true,
           "markdownDescription": "In `Cargo.toml`, complete the names, versions and features of dependencies from crates.io."
         },
+        "toml.cargo.dependencyStyle": {
+          "type": "string",
+          "enum": [
+            "table",
+            "string"
+          ],
+          "enumDescriptions": [
+            "serde = { version = \"1.0\" }, ready for features",
+            "serde = \"1.0\""
+          ],
+          "default": "table",
+          "markdownDescription": "How a dependency completed from crates.io is written in `Cargo.toml`. The quick fixes `Convert to ...` switch a dependency between both forms."
+        },
         "toml.cargo.versionCompletion": {
           "type": "boolean",
           "default": false,
