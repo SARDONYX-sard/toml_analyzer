@@ -6,9 +6,9 @@ default-members = ["crates/toml_analyzer"]
 [workspace.package]
 authors = ["SARDONYX"]
 edition = "2024"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/SARDONYX-sard/toml_analyzer"
 rust-version = "1.96"
+repository = "https://github.com/SARDONYX-sard/toml_analyzer"
+license = "MIT OR Apache-2.0"
 
 [profile.dev]
 debug = 1
