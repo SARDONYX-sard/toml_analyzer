@@ -43,6 +43,9 @@
           "uv.lock",
           "pdm.lock"
         ],
+        "filenamePatterns": [
+          "**/.cargo/config"
+        ],
         "configuration": "./language-configuration.json",
         "icon": {
           "light": "./resources/toml.svg",
@@ -55,6 +58,16 @@
         "language": "toml",
         "scopeName": "source.toml",
         "path": "./syntaxes/toml.tmLanguage.json"
+      },
+      {
+        "scopeName": "markdown.toml.codeblock",
+        "path": "./syntaxes/markdown-toml.injection.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.toml": "toml"
+        }
       }
     ],
     "semanticTokenScopes": [

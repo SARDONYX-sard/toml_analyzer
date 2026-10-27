@@ -444,15 +444,24 @@ fn fetch_catalog(settings: &FetchSettings) -> Result<Vec<CatalogEntry>, String> 
             let url = s.get("url")?.as_str()?.to_owned();
             let name = s.get("name").and_then(Value::as_str).unwrap_or(&url).to_owned();
             let description = s.get("description").and_then(Value::as_str).map(str::to_owned);
-            let patterns: Vec<String> = s
+            let all: Vec<&str> = s
                 .get("fileMatch")
                 .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
                 .filter_map(Value::as_str)
-                .filter(|p| p.to_ascii_lowercase().ends_with(".toml"))
-                .map(str::to_owned)
                 .collect();
+            let is_toml = |p: &&str| p.to_ascii_lowercase().ends_with(".toml");
+            // A schema of TOML files also takes their names without an
+            // extension: `.cargo/config` beside `.cargo/config.toml`.
+            let patterns: Vec<String> = if all.iter().any(is_toml) {
+                all.iter()
+                    .filter(|p| is_toml(p) || !p.rsplit('/').next().unwrap_or(p).contains('.'))
+                    .map(|p| (*p).to_owned())
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let globs = glob_set(&patterns, None).map(|(set, _)| set);
             Some(CatalogEntry { name, description, url, globs })
         })
