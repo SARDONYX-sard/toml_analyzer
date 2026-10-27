@@ -97,7 +97,9 @@ fn capabilities() -> ServerCapabilities {
             work_done_progress_options: WorkDoneProgressOptions::default(),
         }),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(["=", ".", "[", "\"", " "].map(str::to_owned).to_vec()),
+            trigger_characters: Some(
+                ["=", ".", "[", "\"", " ", "/", ":"].map(str::to_owned).to_vec(),
+            ),
             ..Default::default()
         }),
         semantic_tokens_provider: Some(SemanticTokensServerCapabilities::SemanticTokensOptions(

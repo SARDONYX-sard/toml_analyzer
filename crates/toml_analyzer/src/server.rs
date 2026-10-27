@@ -490,7 +490,12 @@ impl Server {
             }
             _ => SchemaState::None,
         };
-        toml_ide::diagnostics(&doc.doc, state)
+        let mut found = toml_ide::diagnostics(&doc.doc, state);
+        if self.config.cargo && crate::handlers::is_cargo_manifest(doc) {
+            found.extend(toml_ide::cargo_feature_diagnostics(&doc.doc));
+            found.sort_by_key(|d| (d.range.start(), d.range.end()));
+        }
+        found
     }
 
     fn publish(&mut self, key: &str) {

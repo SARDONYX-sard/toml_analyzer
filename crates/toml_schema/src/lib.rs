@@ -25,7 +25,7 @@ use url::Url;
 
 pub use crate::{
     lookup::{KeyInfo, SchemaInfo, expand, key_completions, schemas_at},
-    validate::{Severity, Suggestion, Target, ValidationError, validate},
+    validate::{Severity, Suggestion, Target, ValidationError, closest, validate},
 };
 
 /// The keywords whose values are data rather than subschemas.

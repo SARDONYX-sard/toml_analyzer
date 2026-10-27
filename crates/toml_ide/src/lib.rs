@@ -8,6 +8,7 @@
 mod cargo;
 mod completion;
 mod diagnostics;
+mod features;
 mod fixes;
 mod folding;
 mod hover;
@@ -38,6 +39,7 @@ pub use crate::{
     },
     completion::{CompletionItem, CompletionKind, completions},
     diagnostics::{Diagnostic, SchemaState, Severity, diagnostics},
+    features::{cargo_feature_completions, cargo_feature_diagnostics},
     fixes::{Fix, sort_keys_fix},
     folding::{Fold, FoldKind, folding_ranges},
     hover::{Hover, hover},

@@ -20,11 +20,11 @@ pub struct Fix {
 }
 
 impl Fix {
-    fn new(title: impl Into<String>, range: TextRange, text: impl Into<String>) -> Fix {
+    pub(crate) fn new(title: impl Into<String>, range: TextRange, text: impl Into<String>) -> Fix {
         Fix { title: title.into(), edits: vec![(range, text.into())], preferred: false }
     }
 
-    fn preferred(mut self) -> Fix {
+    pub(crate) fn preferred(mut self) -> Fix {
         self.preferred = true;
         self
     }

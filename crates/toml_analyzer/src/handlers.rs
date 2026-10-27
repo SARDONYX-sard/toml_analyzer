@@ -130,6 +130,9 @@ impl Server {
                 }
             });
         }
+        if cargo {
+            items.extend(toml_ide::cargo_feature_completions(doc, offset));
+        }
         if let Some(url) = &url {
             let schema = Schema { registry: &self.schemas.registry, url };
             items.extend(toml_ide::completions(doc, offset, schema, snippets));
@@ -411,7 +414,7 @@ fn completion_item(doc: &Document, i: toml_ide::CompletionItem) -> CompletionIte
 }
 
 /// Whether the document is a `Cargo.toml`.
-fn is_cargo_manifest(doc: &crate::server::Doc) -> bool {
+pub(crate) fn is_cargo_manifest(doc: &crate::server::Doc) -> bool {
     let name = doc.uri.as_str().rsplit('/').next().unwrap_or("");
     name.eq_ignore_ascii_case("Cargo.toml")
 }

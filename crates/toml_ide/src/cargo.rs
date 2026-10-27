@@ -65,6 +65,8 @@ pub enum CargoTarget {
         requirement: Option<String>,
         /// The features already listed.
         existing: Vec<String>,
+        /// Written before each feature: `serde/` in `[features]`.
+        prefix: String,
     },
 }
 
@@ -108,6 +110,9 @@ fn dependency_table(path: &[PathSegment]) -> Option<usize> {
 pub fn cargo_context(doc: &Document, offset: TextSize) -> Option<CargoContext> {
     let position = position_at(doc, offset);
     let path = &position.path;
+    if let Some(context) = feature_of_dependency(doc, &position, offset) {
+        return Some(context);
+    }
     let table = dependency_table(path)?;
     match &position.kind {
         PositionKind::Key { range, header, .. } if path.len() == table => {
@@ -140,6 +145,7 @@ pub fn cargo_context(doc: &Document, offset: TextSize) -> Option<CargoContext> {
                         name: name.clone(),
                         requirement: requirement(doc, dep),
                         existing: features(doc, dep),
+                        prefix: String::new(),
                     }
                 }
                 _ => return None,
@@ -148,8 +154,8 @@ pub fn cargo_context(doc: &Document, offset: TextSize) -> Option<CargoContext> {
             let real = package_name(doc, &path[..=table]).unwrap_or_else(|| name.clone());
             let target = match target {
                 CargoTarget::Version { .. } => CargoTarget::Version { name: real.clone() },
-                CargoTarget::Feature { requirement, existing, .. } => {
-                    CargoTarget::Feature { name: real.clone(), requirement, existing }
+                CargoTarget::Feature { requirement, existing, prefix, .. } => {
+                    CargoTarget::Feature { name: real.clone(), requirement, existing, prefix }
                 }
                 other => other,
             };
@@ -163,6 +169,52 @@ pub fn cargo_context(doc: &Document, offset: TextSize) -> Option<CargoContext> {
         }
         _ => None,
     }
+}
+
+/// `"serde/|"` in `[features]`: the features of `serde`.
+fn feature_of_dependency(
+    doc: &Document,
+    position: &crate::Position,
+    offset: TextSize,
+) -> Option<CargoContext> {
+    let PositionKind::Value { range } = position.kind else { return None };
+    let [PathSegment::Key(table), PathSegment::Key(_), PathSegment::Index(_)] =
+        position.path.as_slice()
+    else {
+        return None;
+    };
+    if table != "features" {
+        return None;
+    }
+    let (name, prefix) = crate::features::written_dependency(doc, range, offset)?;
+    let dep = crate::features::dependencies(doc).into_iter().find(|d| d.name == name)?.path;
+    let array = &position.path[..2];
+    let existing = match doc.dom.get(array) {
+        Some(Item::Array(a)) => a
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Item::Value(v) => match &v.kind {
+                    ValueKind::String(s) => s.strip_prefix(&prefix).map(str::to_owned),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let real = package_name(doc, &dep).unwrap_or(name);
+    Some(CargoContext {
+        target: CargoTarget::Feature {
+            name: real.clone(),
+            requirement: requirement(doc, &dep),
+            existing,
+            prefix,
+        },
+        range,
+        query: CargoQuery::Versions(real),
+        local_path: string_at(doc, &with(&dep, "path")),
+    })
 }
 
 fn string_at(doc: &Document, path: &[PathSegment]) -> Option<String> {
@@ -294,7 +346,7 @@ pub fn cargo_completions(
                 })
                 .collect()
         }
-        CargoTarget::Feature { name, requirement, existing } => {
+        CargoTarget::Feature { name, requirement, existing, prefix } => {
             let Some(version) =
                 select_version(versions.unwrap_or_default(), requirement.as_deref())
             else {
@@ -307,7 +359,8 @@ pub fn cargo_completions(
                 .enumerate()
                 .map(|(i, f)| {
                     let detail = format!("{name} {}", version.version);
-                    item(f.clone(), quote(f), CompletionKind::Value, Some(detail), None, i)
+                    let insert = quote(&format!("{prefix}{f}"));
+                    item(f.clone(), insert, CompletionKind::Value, Some(detail), None, i)
                 })
                 .collect()
         }

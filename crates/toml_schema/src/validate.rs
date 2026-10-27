@@ -960,7 +960,7 @@ impl<'r> Validator<'r, '_> {
 }
 
 /// The closest name to `key` among `known`, for typos.
-fn closest<'a>(key: &str, known: &[&'a str]) -> Option<&'a str> {
+pub fn closest<'a>(key: &str, known: &[&'a str]) -> Option<&'a str> {
     let lower = key.to_lowercase();
     known
         .iter()

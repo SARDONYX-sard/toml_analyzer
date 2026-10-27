@@ -175,7 +175,8 @@ fn cargo_contexts() {
         CargoTarget::Feature {
             name: "serde".to_owned(),
             requirement: Some("1.0".to_owned()),
-            existing: vec!["derive".to_owned()]
+            existing: vec!["derive".to_owned()],
+            prefix: String::new(),
         }
     );
     assert!(cargo("[package]\nname = $0\n").is_none());
@@ -517,4 +518,86 @@ fn cargo_workspace_inheritance() {
     let (doc, offset) = cursor("[dependencies]\nse$0rde.workspace = true\n");
     let r = crate::cargo_workspace_ref(&doc, offset).unwrap();
     assert_eq!(&root.text[root.locate(&r.target, true)], "serde");
+}
+
+#[test]
+fn cargo_feature_checks() {
+    let src = r#"[dependencies]
+serde = "1"
+tracing = { version = "0.1" }
+log.workspace = true
+opt = { version = "1", optional = true }
+
+[dependencies.rand]
+version = "0.8"
+
+[dev-dependencies]
+tokio = "1"
+
+[features]
+default = ["std", "stf", "opt", "dep:tracing", "dep:tracng", "dep:log", "dep:rand"]
+std = ["serde/derive", "serd/derive", "serde?/std", "tokio/full", "opt?/x"]
+"#;
+    let doc = Document::new(src);
+    let mut out = String::new();
+    for d in crate::cargo_feature_diagnostics(&doc) {
+        out.push_str(&format!("{:?} {}: {}\n", d.severity, &src[d.range], d.message));
+        for f in &d.fixes {
+            let mut text = src.to_owned();
+            for (range, new) in f.edits.iter().rev() {
+                text.replace_range(usize::from(range.start())..usize::from(range.end()), new);
+            }
+            let changed: Vec<&str> =
+                text.lines().filter(|l| !src.lines().any(|s| s == *l)).collect();
+            let star = if f.preferred { "*" } else { " " };
+            out.push_str(&format!("  {star}{} => {changed:?}\n", f.title));
+        }
+    }
+    expect![[r#"
+        Error "stf": `stf` is neither a feature nor an optional dependency, did you mean `std`?
+          *Replace with `"std"` => ["default = [\"std\", \"std\", \"opt\", \"dep:tracing\", \"dep:tracng\", \"dep:log\", \"dep:rand\"]"]
+        Error "dep:tracing": `dep:tracing` needs `tracing` to be an optional dependency
+          *Make `tracing` optional => ["tracing = { version = \"0.1\", optional = true }"]
+        Error "dep:tracng": `tracng` is not a dependency, did you mean `tracing`?
+          *Replace with `"dep:tracing"` => ["default = [\"std\", \"stf\", \"opt\", \"dep:tracing\", \"dep:tracing\", \"dep:log\", \"dep:rand\"]"]
+        Error "dep:log": `dep:log` needs `log` to be an optional dependency
+          *Make `log` optional => ["log.optional = true"]
+        Error "dep:rand": `dep:rand` needs `rand` to be an optional dependency
+          *Make `rand` optional => ["optional = true"]
+        Error "serd/derive": `serd` is not a dependency, did you mean `serde`?
+          *Replace with `"serde/derive"` => ["std = [\"serde/derive\", \"serde/derive\", \"serde?/std\", \"tokio/full\", \"opt?/x\"]"]
+        Warning "serde?/std": `serde` is not optional: `serde?/` is the same as `serde/`
+          *Make `serde` optional => ["serde = { version = \"1\", optional = true }"]
+        Error "tokio/full": `tokio` is not a dependency
+    "#]].assert_eq(&out);
+}
+
+#[test]
+fn cargo_feature_items() {
+    let src = "[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\nopt = { version = \"1\", optional = true }\nhid = { version = \"1\", optional = true }\n\n[features]\ndefault = [\"std\", \"$0\"]\nstd = [\"dep:hid\"]\nextra = []\n";
+    let (doc, offset) = cursor(src);
+    let labels: Vec<String> =
+        crate::cargo_feature_completions(&doc, offset).into_iter().map(|i| i.insert).collect();
+    assert_eq!(labels, ["\"extra\"", "\"opt\"", "\"dep:opt\"", "\"dep:hid\""]);
+
+    let src = "[dependencies]\nserde = { version = \"1\" }\n\n[features]\nstd = [\"serde/std\", \"serde/$0\"]\n";
+    let (doc, offset) = cursor(src);
+    assert!(crate::cargo_feature_completions(&doc, offset).is_empty());
+    let c = crate::cargo_context(&doc, offset).unwrap();
+    assert_eq!(c.query, crate::CargoQuery::Versions("serde".to_owned()));
+    let versions = [crate::CrateVersion {
+        version: "1.0.0".to_owned(),
+        yanked: false,
+        features: vec!["std".to_owned(), "derive".to_owned()],
+    }];
+    let items =
+        crate::cargo_completions(&c, None, Some(&versions), crate::DependencyStyle::Table, false);
+    let inserts: Vec<String> = items.into_iter().map(|i| i.insert).collect();
+    assert_eq!(inserts, ["\"serde/derive\""]);
+
+    let (doc, offset) = cursor("[dependencies]\nserde = \"1\"\n[features]\na = [\"serde?/$0\"]\n");
+    let c = crate::cargo_context(&doc, offset).unwrap();
+    assert!(
+        matches!(c.target, crate::CargoTarget::Feature { ref prefix, .. } if prefix == "serde?/")
+    );
 }
