@@ -73,12 +73,14 @@ export function expandPath(p: string): string {
   return p.replace("${workspaceFolder}", folder).replace(/^~(?=$|[\\/])/, home);
 }
 
-/** The server executable: `toml.server.path`, or the bundled one. */
-export function serverPath(context: vscode.ExtensionContext): string {
+/** `toml.server.path`, if set. */
+export function configuredServerPath(): string | undefined {
   const configured = vscode.workspace.getConfiguration("toml").get<string>("server.path");
-  if (configured) {
-    return expandPath(configured);
-  }
+  return configured ? expandPath(configured) : undefined;
+}
+
+/** The server bundled in a platform specific VSIX (or a local build). */
+export function bundledServerPath(context: vscode.ExtensionContext): string {
   const exe = process.platform === "win32" ? "toml_analyzer.exe" : "toml_analyzer";
   return context.asAbsolutePath(path.join("build", exe));
 }

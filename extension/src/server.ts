@@ -2,16 +2,34 @@ import * as fs from "node:fs";
 import * as vscode from "vscode";
 import { LanguageClient, type LanguageClientOptions, type ServerOptions } from "vscode-languageclient/node";
 
-import { serverArgs, serverPath, settings } from "./settings";
+import { downloadedServer } from "./download";
+import { bundledServerPath, configuredServerPath, serverArgs, settings } from "./settings";
 import { log, state } from "./state";
+
+/**
+ * The server executable: `toml.server.path`, else the bundled one, else the
+ * one of the GitHub release, downloaded once.
+ */
+async function serverCommand(context: vscode.ExtensionContext): Promise<string | undefined> {
+  const configured = configuredServerPath();
+  if (configured) {
+    if (!fs.existsSync(configured)) {
+      void vscode.window.showErrorMessage(`TOML language server not found: ${configured} (\`toml.server.path\`).`);
+      return undefined;
+    }
+    return configured;
+  }
+  const bundled = bundledServerPath(context);
+  if (fs.existsSync(bundled)) {
+    return bundled;
+  }
+  return downloadedServer(context);
+}
 
 /** Starts the language server and connects the client to it. */
 export async function startServer(context: vscode.ExtensionContext): Promise<void> {
-  const command = serverPath(context);
-  if (!fs.existsSync(command)) {
-    void vscode.window.showErrorMessage(
-      `TOML language server not found: ${command}. Build it with \`cargo build --release\` or set \`toml.server.path\`.`,
-    );
+  const command = await serverCommand(context);
+  if (!command) {
     return;
   }
 

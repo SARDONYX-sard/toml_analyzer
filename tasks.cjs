@@ -35,16 +35,25 @@ const git = (...args) => {
 
 /**
  * Copies the language server next to the compiled extension in build/, and
- * optionally packages a platform specific VSIX.
+ * optionally packages a platform specific VSIX. `--universal` packages none:
+ * the extension downloads the server of its platform from the GitHub release.
  */
 function build(args) {
+  const buildDir = path.join(__dirname, "build");
+  if (args.includes("--universal")) {
+    for (const old of ["toml_analyzer", "toml_analyzer.exe"]) fs.rmSync(path.join(buildDir, old), { force: true });
+    run("npm run check");
+    run("npm run compile");
+    run("npx vsce package --no-dependencies --skip-license --out build/toml-analyzer.vsix");
+    console.log("packaged build/toml-analyzer.vsix");
+    return;
+  }
   const target = option(args, "--target");
   const profile = option(args, "--profile") ?? "release";
   const windows = target ? target.includes("windows") : process.platform === "win32";
   const exe = windows ? "toml_analyzer.exe" : "toml_analyzer";
   const src = option(args, "--binary") ?? path.join(__dirname, "target", ...(target ? [target] : []), profile, exe);
 
-  const buildDir = path.join(__dirname, "build");
   fs.mkdirSync(buildDir, { recursive: true });
   // Only one server binary per package: remove the one of another platform.
   for (const old of ["toml_analyzer", "toml_analyzer.exe"]) {
@@ -204,13 +213,15 @@ with the same message. Nothing is pushed.`,
     run: icon,
   },
   build: {
-    usage: "[--vsix] [--target <rust triple>] [--profile <name>] [--binary <path>]",
+    usage: "[--vsix] [--target <rust triple>] [--profile <name>] [--binary <path>] | --universal",
     help: `Copies the server next to the extension in build/.
   --target   the Rust target the server was built for, e.g. x86_64-pc-windows-msvc
              (default: the host build in target/<profile>/)
   --profile  the Cargo profile (default: release)
   --binary   the server binary to copy, instead of looking in target/
-  --vsix     also compile the extension and package build/toml-analyzer-<platform>.vsix`,
+  --vsix     also compile the extension and package build/toml-analyzer-<platform>.vsix
+  --universal  package build/toml-analyzer.vsix without a server: the extension
+             downloads the one of its platform from the GitHub release`,
     run: build,
   },
   tag: {

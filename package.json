@@ -13,7 +13,7 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/SARDONYX-sard/toml_analyzer"
+    "url": "https://github.com/Thoughts-with-friends/toml_analyzer"
   },
   "engines": {
     "vscode": "^1.125.0"
@@ -215,7 +215,7 @@
         "toml.server.path": {
           "type": "string",
           "default": "",
-          "description": "The language server executable. Empty: the bundled one."
+          "markdownDescription": "The language server executable. Empty: the one bundled in the VSIX, else the one of the [GitHub release](https://github.com/Thoughts-with-friends/toml_analyzer/releases) for this platform, downloaded on first use."
         },
         "toml.server.extraArgs": {
           "type": "array",

@@ -2,7 +2,9 @@ name: Build
 
 # Builds, for each platform, the VSIX and an archive (zip on Windows, tar.gz
 # elsewhere) of toml_analyzer: the server and the `fmt` and `check`
-# subcommands. Pushes to main and pull requests upload them as artifacts; tags
+# subcommands, and a VSIX without a server (`toml-analyzer.vsix`), which
+# downloads the archive of its platform from the release on first use.
+# Pushes to main and pull requests upload them as artifacts; tags
 # build with `release-lto` and attach them to the GitHub release.
 on:
   push:
@@ -35,7 +37,19 @@ jobs:
               exe: "",
             }
           - {
+              target: x86_64-apple-darwin,
+              os: macos-latest,
+              archive: tar.gz,
+              exe: "",
+            }
+          - {
               target: x86_64-pc-windows-msvc,
+              os: windows-latest,
+              archive: zip,
+              exe: .exe,
+            }
+          - {
+              target: aarch64-pc-windows-msvc,
               os: windows-latest,
               archive: zip,
               exe: .exe,
@@ -43,6 +57,12 @@ jobs:
           - {
               target: x86_64-unknown-linux-gnu,
               os: ubuntu-latest,
+              archive: tar.gz,
+              exe: "",
+            }
+          - {
+              target: aarch64-unknown-linux-gnu,
+              os: ubuntu-24.04-arm,
               archive: tar.gz,
               exe: "",
             }
@@ -60,6 +80,10 @@ jobs:
         uses: Swatinem/rust-cache@v2.9.3
         with:
           prefix-key: cargo-${{ env.PROFILE }}-${{ matrix.job.target }}
+
+      # Cross builds: x86_64 on the arm64 macOS runner, arm64 on Windows x64.
+      - name: Add the target
+        run: rustup target add ${{ matrix.job.target }}
 
       - name: Build
         run: cargo build --profile ${{ env.PROFILE }} --target ${{ matrix.job.target }}
@@ -124,4 +148,39 @@ jobs:
         with:
           allowUpdates: true
           artifacts: build/*.vsix,build/${{ env.ASSET }}
+          omitBody: true
+
+  # The VSIX of every platform, without a server: the extension downloads
+  # the archive of its platform from the release of its version.
+  universal:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Package VSIX
+        run: node tasks.cjs build --universal
+
+      - name: Upload artifacts
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.APP_NAME }}-universal
+          path: build/toml-analyzer.vsix
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: ncipollo/release-action@v1.21.0
+        with:
+          allowUpdates: true
+          artifacts: build/toml-analyzer.vsix
           omitBody: true
