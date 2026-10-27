@@ -1,6 +1,6 @@
 [package]
 name = "toml_analyzer"
-version = "0.1.0"
+version = "0.2.0"
 description = "Language server for TOML, with JSON Schema support."
 authors.workspace = true
 edition.workspace = true
