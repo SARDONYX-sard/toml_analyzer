@@ -2,7 +2,7 @@
   "name": "toml-analyzer",
   "displayName": "TOML Analyzer",
   "description": "TOML language support with JSON Schema: validation, completion, hover, formatting and more.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "SARDONYX",
   "license": "MIT OR Apache-2.0",
   "icon": "resources/icon.png",
