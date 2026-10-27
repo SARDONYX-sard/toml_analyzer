@@ -10,6 +10,18 @@
       "preLaunchTask": "npm: debug",
       "sourceMaps": true,
       "outFiles": ["${workspaceFolder}/build/**/*.cjs"]
+    },
+    {
+      // The server of the GitHub release, downloaded again on each launch.
+      "name": "Run TOML Analyzer Extension (download server)",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "env": { "TOML_ANALYZER_DOWNLOAD": "1" },
+      "preLaunchTask": "npm: compile:debug",
+      "sourceMaps": true,
+      "outFiles": ["${workspaceFolder}/build/**/*.cjs"]
     }
   ]
 }

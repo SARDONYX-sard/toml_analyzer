@@ -3,7 +3,7 @@
   "displayName": "TOML Analyzer",
   "description": "TOML language support with JSON Schema: validation, completion, hover, formatting and more.",
   "version": "0.1.0",
-  "publisher": "SARDONYX",
+  "publisher": "Dylan23691",
   "license": "MIT OR Apache-2.0",
   "icon": "resources/icon.png",
   "galleryBanner": {
@@ -237,6 +237,7 @@
     "release:patch": "node ./tasks.cjs release patch",
     "package": "npm run build:server && node ./tasks.cjs build --vsix",
     "tag": "node ./tasks.cjs tag",
+    "test:vsix": "node ./tasks.cjs test-vsix",
     "check": "tsc -p ./extension",
     "compile:debug": "vite build --config extension/vite.config.ts --mode development",
     "debug": "npm run compile:debug && cargo build && node ./tasks.cjs build --profile debug"

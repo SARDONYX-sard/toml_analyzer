@@ -8,7 +8,8 @@ import { log, state } from "./state";
 
 /**
  * The server executable: `toml.server.path`, else the bundled one, else the
- * one of the GitHub release, downloaded once.
+ * one of the GitHub release, downloaded once. `TOML_ANALYZER_DOWNLOAD=1`
+ * (a launch configuration) skips the bundled one and downloads again.
  */
 async function serverCommand(context: vscode.ExtensionContext): Promise<string | undefined> {
   const configured = configuredServerPath();
@@ -19,11 +20,12 @@ async function serverCommand(context: vscode.ExtensionContext): Promise<string |
     }
     return configured;
   }
+  const redownload = process.env.TOML_ANALYZER_DOWNLOAD === "1";
   const bundled = bundledServerPath(context);
-  if (fs.existsSync(bundled)) {
+  if (!redownload && fs.existsSync(bundled)) {
     return bundled;
   }
-  return downloadedServer(context);
+  return downloadedServer(context, redownload);
 }
 
 /** Starts the language server and connects the client to it. */

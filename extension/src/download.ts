@@ -34,7 +34,10 @@ function repository(context: vscode.ExtensionContext): string {
  * The server downloaded for the version of the extension, in the global
  * storage: downloaded from the GitHub release on first use.
  */
-export async function downloadedServer(context: vscode.ExtensionContext): Promise<string | undefined> {
+export async function downloadedServer(
+  context: vscode.ExtensionContext,
+  redownload = false,
+): Promise<string | undefined> {
   const target = hostTarget();
   if (!target) {
     void vscode.window.showErrorMessage(
@@ -46,7 +49,8 @@ export async function downloadedServer(context: vscode.ExtensionContext): Promis
   const root = path.join(context.globalStorageUri.fsPath, "server");
   const dir = path.join(root, version);
   const exe = path.join(dir, EXE);
-  if (fs.existsSync(exe)) {
+  if (fs.existsSync(exe) && !redownload) {
+    log(`Using the downloaded server ${exe}`);
     return exe;
   }
 
@@ -59,6 +63,7 @@ export async function downloadedServer(context: vscode.ExtensionContext): Promis
       { location: vscode.ProgressLocation.Notification, title: "Downloading the TOML language server" },
       () => download(urls, root, dir, archive),
     );
+    log(`Downloaded the server to ${exe}`);
   } catch (error) {
     log(`Cannot download the TOML language server: ${String(error)}`);
     void vscode.window.showErrorMessage(

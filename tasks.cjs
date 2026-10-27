@@ -138,6 +138,95 @@ function icon(args) {
   console.log(`rendered ${out}`);
 }
 
+/** `https://github.com/owner/name` of package.json. */
+const repositoryUrl = () => {
+  const { repository } = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+  const url = typeof repository === "string" ? repository : repository?.url;
+  return (url ?? "").replace(/^git\+/, "").replace(/\.git$/, "");
+};
+
+/** The sample workspace of `test-vsix`: what to try by hand. */
+const SAMPLES = {
+  "Cargo.toml": `[package]
+name = "sample"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tracing = { version = "0.1", optional = true }
+log = "0.4"
+
+[features]
+# Errors: \`stf\` is a typo, \`log\` is not optional.
+default = ["std", "stf", "dep:log"]
+std = ["serde/std", "dep:tracing"]
+`,
+  ".cargo/config.toml": `[build]
+# Complete the keys of [build] here.
+
+`,
+  "README.md": `# Sample
+
+\`\`\`toml
+[package]
+name = "highlighted"
+version = "0.1.0"
+\`\`\`
+`,
+};
+
+/**
+ * Downloads the VSIX of the latest GitHub release (or of `--tag`), installs
+ * it in a VS Code with its own, empty, user data and extensions, and opens a
+ * sample workspace there: the server is downloaded on first use, as for a user.
+ */
+async function testVsix(args) {
+  const repo = repositoryUrl();
+  const api = repo.replace("https://github.com/", "https://api.github.com/repos/");
+  const tag = option(args, "--tag");
+  const res = await fetch(`${api}/releases/${tag ? `tags/${tag}` : "latest"}`, {
+    headers: { Accept: "application/vnd.github+json", "User-Agent": "toml_analyzer-tasks" },
+  });
+  if (!res.ok) throw new Error(`${repo}: no release ${tag ?? "latest"} (${res.status})`);
+  const release = await res.json();
+  const platform = `${process.platform}-${process.arch}`;
+  // Without a server by default: the extension downloads it.
+  const names = args.includes("--platform")
+    ? [`toml-analyzer-${platform}.vsix`]
+    : ["toml-analyzer.vsix", `toml-analyzer-${platform}.vsix`];
+  const asset = names.map((n) => release.assets.find((a) => a.name === n)).find(Boolean);
+  if (!asset) throw new Error(`release ${release.tag_name} has none of ${names.join(", ")}`);
+
+  // Everything afresh: no server downloaded before, no other extension.
+  const dir = path.join(__dirname, "build", "test-vsix");
+  fs.rmSync(dir, { recursive: true, force: true });
+  const workspace = path.join(dir, "workspace");
+  for (const [name, text] of Object.entries(SAMPLES)) {
+    fs.mkdirSync(path.dirname(path.join(workspace, name)), { recursive: true });
+    fs.writeFileSync(path.join(workspace, name), text);
+  }
+  console.log(`downloading ${asset.browser_download_url}`);
+  const vsix = path.join(dir, asset.name);
+  const download = await fetch(asset.browser_download_url);
+  if (!download.ok) throw new Error(`${asset.browser_download_url}: ${download.status}`);
+  fs.writeFileSync(vsix, Buffer.from(await download.arrayBuffer()));
+
+  // Quoted only when needed: a quoted `code` breaks the `%~dp0` of code.cmd.
+  const exe = option(args, "--code") ?? "code";
+  const code = exe.includes(" ") ? `"${exe}"` : exe;
+  const isolated = `--extensions-dir "${path.join(dir, "extensions")}" --user-data-dir "${path.join(dir, "user-data")}"`;
+  run(`${code} ${isolated} --install-extension "${vsix}"`);
+  run(`${code} ${isolated} --new-window "${workspace}" "${path.join(workspace, "Cargo.toml")}"`);
+  console.log(`
+Opened ${release.tag_name} (${asset.name}) in an isolated VS Code. Check:
+  - the notification "Downloading the TOML language server" (VSIX without a server)
+  - Output > TOML Analyzer: the URL and the path of the downloaded server
+  - Cargo.toml: the errors of [features], completion in "..." and after "serde/"
+  - .cargo/config.toml: completion in [build]
+  - README.md: highlighting of the \`\`\`toml block`);
+}
+
 /** The manifest of the server crate, whose version is the release version. */
 const CRATE_MANIFEST = path.join(__dirname, "crates", "toml_analyzer", "Cargo.toml");
 
@@ -224,6 +313,17 @@ with the same message. Nothing is pushed.`,
              downloads the one of its platform from the GitHub release`,
     run: build,
   },
+  "test-vsix": {
+    usage: "[--tag <tag>] [--platform] [--code <path>]",
+    help: `Downloads the VSIX of the latest GitHub release and opens it in a VS Code with
+its own empty user data and extensions (build/test-vsix/, recreated each time),
+on a sample workspace, for testing by hand.
+  --tag       the release (default: the latest)
+  --platform  the VSIX of this platform, with its server (default: the one without
+             a server, which downloads it; else the one of this platform)
+  --code      the VS Code command (default: code), e.g. code-insiders`,
+    run: testVsix,
+  },
   tag: {
     usage: "[-m <message>] [--no-push]",
     help: `Tags HEAD as <package.json version>-dev.<short sha> (signed, annotated, forced)
@@ -255,4 +355,9 @@ if (!task) {
   help();
   process.exit(1);
 }
-task.run(args);
+Promise.resolve()
+  .then(() => task.run(args))
+  .catch((e) => {
+    console.error(e instanceof Error ? e.message : e);
+    process.exit(1);
+  });

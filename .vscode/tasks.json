@@ -10,6 +10,14 @@
       "problemMatcher": []
     },
     {
+      // Unminified extension with a source map, no server.
+      "label": "npm: compile:debug",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "compile:debug"],
+      "problemMatcher": []
+    },
+    {
       // Minified extension and a release build of the server.
       "label": "npm: release",
       "type": "shell",
