@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { State } from "vscode-languageclient/node";
 
+import { formatAll } from "./formatAll";
 import { restartServer, startServer, stopServer } from "./server";
 import { state } from "./state";
 import { clearSchemaCache, createStatusBar, refreshStatus, schemaActions, showStatus } from "./statusBar";
@@ -14,6 +15,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("toml.restartServer", restartServer),
     vscode.commands.registerCommand("toml.clearSchemaCache", clearSchemaCache),
+    vscode.commands.registerCommand("toml.formatAll", formatAll),
     vscode.commands.registerCommand("toml.showStatus", showStatus),
     vscode.commands.registerCommand("toml.schemaActions", schemaActions),
   );

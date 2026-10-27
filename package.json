@@ -83,6 +83,11 @@
         "category": "TOML"
       },
       {
+        "command": "toml.formatAll",
+        "title": "Format All TOML Files",
+        "category": "TOML"
+      },
+      {
         "command": "toml.restartServer",
         "title": "Restart Language Server",
         "category": "TOML"

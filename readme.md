@@ -15,6 +15,7 @@ TOML language server + VS Code extension + JSON Schema
 | Completion                    | key / `[table]` / value (`enum`, `default`, `true` / `false`)     |
 | Hover                         | schema `title` + `description` + `default`                        |
 | Format                        | `a   =1` → `a = 1`                                                |
+| Format all                    | `TOML: Format All TOML Files` (skip: `*.lock`, `.gitignore`)      |
 | Outline / folding / highlight | yes                                                               |
 | Path link                     | `"./src/main.rs"` → Ctrl+click / F12                              |
 
