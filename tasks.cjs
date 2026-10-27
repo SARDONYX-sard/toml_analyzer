@@ -121,8 +121,8 @@ function icon(args) {
   fs.writeFileSync(
     html,
     `<!doctype html><html><body style="margin:0;background:transparent">` +
-      svg.replace(/width="\d+" height="\d+"/, `width="${size}" height="${size}"`) +
-      `</body></html>`,
+    svg.replace(/width="\d+" height="\d+"/, `width="${size}" height="${size}"`) +
+    `</body></html>`,
   );
   const out = path.join(__dirname, "resources", "icon.png");
   execFileSync(browser, [
@@ -279,9 +279,9 @@ function release(args) {
 
   git("add", "--", ...files);
   const message = `build: bump up to ${old} -> ${next}`;
-  git("commit", "-S", "-m", message);
+  git("commit", "-m", message);
   // `-s` signs tags (`-S` is the switch of `git commit` only).
-  git("tag", "-s", "-m", message, next);
+  git("tag", "-m", message, next);
   console.log(`committed and tagged ${next}; push with: git push origin HEAD ${next}`);
 }
 
