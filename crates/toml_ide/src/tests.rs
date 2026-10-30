@@ -578,7 +578,8 @@ fn cargo_feature_items() {
     let (doc, offset) = cursor(src);
     let labels: Vec<String> =
         crate::cargo_feature_completions(&doc, offset).into_iter().map(|i| i.insert).collect();
-    assert_eq!(labels, ["\"extra\"", "\"opt\"", "\"dep:opt\"", "\"dep:hid\""]);
+    // `dep:serde` too: a quick fix makes it optional.
+    assert_eq!(labels, ["\"extra\"", "\"opt\"", "\"dep:serde\"", "\"dep:opt\"", "\"dep:hid\""]);
 
     let src = "[dependencies]\nserde = { version = \"1\" }\n\n[features]\nstd = [\"serde/std\", \"serde/$0\"]\n";
     let (doc, offset) = cursor(src);
@@ -600,4 +601,81 @@ fn cargo_feature_items() {
     assert!(
         matches!(c.target, crate::CargoTarget::Feature { ref prefix, .. } if prefix == "serde?/")
     );
+}
+
+#[test]
+fn cargo_dependency_keys_and_workspace() {
+    let labels = |src: &str| {
+        let (doc, offset) = cursor(src);
+        crate::cargo_dependency_key_completions(&doc, offset, true)
+            .into_iter()
+            .map(|i| i.insert)
+            .collect::<Vec<_>>()
+    };
+    let inline = labels("[dependencies]\nserde = { version = \"1\", $0 }\n");
+    assert!(
+        inline.contains(&"git = \"$1\"".to_owned())
+            && inline.contains(&"features = [$1]".to_owned())
+    );
+    assert!(!inline.iter().any(|i| i.starts_with("version")));
+    assert!(labels("[dependencies.serde]\n$0\n").contains(&"optional = true".to_owned()));
+    assert!(labels("[dependencies]\n$0\n").is_empty());
+
+    // `dep:` for every dependency.
+    let (doc, offset) = cursor("[dependencies]\nlog = \"0.4\"\n[features]\na = [\"$0\"]\n");
+    let items: Vec<String> =
+        crate::cargo_feature_completions(&doc, offset).into_iter().map(|i| i.label).collect();
+    assert_eq!(items, ["dep:log"]);
+
+    let root = Document::new(
+        "[workspace.dependencies]\nm = { path = \"crates/m\" }\nr = { version = \"1.2\", package = \"real\" }\n",
+    );
+    let m = crate::cargo_workspace_dependency(&root, "m").unwrap();
+    assert_eq!((m.path.as_deref(), m.requirement), (Some("crates/m"), None));
+    let r = crate::cargo_workspace_dependency(&root, "r").unwrap();
+    assert_eq!((r.requirement.as_deref(), r.package.as_deref()), (Some("1.2"), Some("real")));
+    let (doc, offset) = cursor("[dependencies]\nm = { workspace = true, features = [\"$0\"] }\n");
+    assert_eq!(crate::cargo_context(&doc, offset).unwrap().workspace_key.as_deref(), Some("m"));
+}
+
+#[test]
+fn key_style() {
+    let apply = |src: &str| -> Vec<String> {
+        let (doc, offset) = cursor(src);
+        crate::key_style_fixes(&doc, offset)
+            .into_iter()
+            .map(|f| {
+                let mut text = doc.text.to_string();
+                for (range, new) in f.edits.iter().rev() {
+                    text.replace_range(usize::from(range.start())..usize::from(range.end()), new);
+                }
+                format!("{} => {text}", f.title)
+            })
+            .collect()
+    };
+    assert_eq!(
+        apply("[dependencies]\npapyrus_compiler.work$0space   = true\n"),
+        [
+            "Convert to `papyrus_compiler = { workspace = true }` => [dependencies]\npapyrus_compiler = { workspace = true }\n"
+        ]
+    );
+    // The other entries of the same table join it.
+    assert_eq!(
+        apply(
+            "[dependencies]\nse$0rde.workspace = true\nlog = \"0.4\"\nserde.features = [\"derive\"]\n"
+        ),
+        [
+            "Convert to `serde = { workspace = true, features = [\"derive\"] }` => [dependencies]\nserde = { workspace = true, features = [\"derive\"] }\nlog = \"0.4\"\n"
+        ]
+    );
+    assert_eq!(
+        apply("[dependencies]\n  serde = { workspace = true, fea$0tures = [\"derive\"] }\n"),
+        [
+            "Convert to dotted keys => [dependencies]\n  serde.workspace = true\n  serde.features = [\"derive\"]\n"
+        ]
+    );
+    assert_eq!(apply("a = { b$0 = 1 }\n"), ["Convert to `a.b = 1` => a.b = 1\n"]);
+    // Not when a header extends the table.
+    assert!(apply("x.a$0.b = 1\n[x.sub]\n").len() == 1);
+    assert!(apply("[t]\na.b$0 = 1\n[t.a.c]\n").is_empty());
 }

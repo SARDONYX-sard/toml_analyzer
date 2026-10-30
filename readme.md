@@ -35,15 +35,18 @@ TOML language server + VS Code extension + JSON Schema
 
 ### `Cargo.toml`
 
-|                                             |                                               |
-| ------------------------------------------- | --------------------------------------------- |
-| `ser` + completion                          | `serde = { version = "1.0.219" }` (crates.io) |
-| `features = ["` + completion                | `"derive"`, `"std"`, ...                      |
-| `serde = "1"` ⇄ `serde = { version = "1" }` | quick fix (selection → all)                   |
-| hover `serde`                               | link: docs.rs / crates.io                     |
-| F12 `local = { path = "../local" }`         | → `../local/Cargo.toml`                       |
-| `path` deps: `version` / `features`         | ← `../local/Cargo.toml`                       |
-| `[dependencies]`                            | A→Z / local first / local last                |
+|                                               |                                                   |
+| --------------------------------------------- | ------------------------------------------------- |
+| `ser` + completion                            | `serde = { version = "1.0.219" }` (crates.io)     |
+| `features = ["` + completion                  | `"derive"`, `"std"`, ...                          |
+| `serde = "1"` ⇄ `serde = { version = "1" }`   | quick fix (selection → all)                       |
+| hover `serde`                                 | link: docs.rs / crates.io                         |
+| F12 `local = { path = "../local" }`           | → `../local/Cargo.toml`                           |
+| `path` deps: `version` / `features`           | ← `../local/Cargo.toml`                           |
+| `[dependencies]`                              | A→Z / local first / local last                    |
+| `serde = { \| }` + completion                 | `version`, `features = []`, `git = ""`, ...       |
+| `[features]` `x = ["\|"]`                     | `"std"`, `"dep:log"`, `"serde/derive"` + check    |
+| `m = { workspace = true, features = ["\|"] }` | ← `[workspace.dependencies]` → member / crates.io |
 
 ## Schema
 

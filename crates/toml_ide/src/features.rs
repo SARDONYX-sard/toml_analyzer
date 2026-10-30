@@ -245,8 +245,11 @@ pub fn cargo_feature_completions(doc: &Document, offset: TextSize) -> Vec<Comple
     for d in implicit(doc, &deps) {
         candidates.push((d.to_owned(), "optional dependency"));
     }
-    for d in deps.iter().filter(|d| d.optional) {
-        candidates.push((format!("dep:{}", d.name), "optional dependency"));
+    // Every dependency: a quick fix makes a non-optional one optional.
+    for d in &deps {
+        let detail =
+            if d.optional { "optional dependency" } else { "dependency, not optional yet" };
+        candidates.push((format!("dep:{}", d.name), detail));
     }
     candidates
         .into_iter()

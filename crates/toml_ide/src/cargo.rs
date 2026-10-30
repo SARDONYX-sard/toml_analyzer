@@ -82,6 +82,9 @@ pub struct CargoContext {
     /// The `path` of a local dependency: its `Cargo.toml` answers instead
     /// of the registry, see [`cargo_local_crate`].
     pub local_path: Option<String>,
+    /// The key of a `workspace = true` dependency: the root `Cargo.toml`
+    /// says where it comes from, see [`cargo_workspace_dependency`].
+    pub workspace_key: Option<String>,
 }
 
 const DEPENDENCY_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
@@ -129,6 +132,7 @@ pub fn cargo_context(doc: &Document, offset: TextSize) -> Option<CargoContext> {
                 range: *range,
                 query: CargoQuery::Search(prefix.to_owned()),
                 local_path: None,
+                workspace_key: None,
             })
         }
         PositionKind::Value { range } => {
@@ -165,6 +169,7 @@ pub fn cargo_context(doc: &Document, offset: TextSize) -> Option<CargoContext> {
                 range: *range,
                 query: CargoQuery::Versions(real),
                 local_path,
+                workspace_key: workspace_key(doc, &path[..=table]),
             })
         }
         _ => None,
@@ -214,7 +219,114 @@ fn feature_of_dependency(
         range,
         query: CargoQuery::Versions(real),
         local_path: string_at(doc, &with(&dep, "path")),
+        workspace_key: workspace_key(doc, &dep),
     })
+}
+
+/// The key of the dependency at `dep` when it has `workspace = true`.
+fn workspace_key(doc: &Document, dep: &[PathSegment]) -> Option<String> {
+    let inherited = matches!(
+        doc.dom.get(&with(dep, "workspace")),
+        Some(Item::Value(v)) if matches!(v.kind, ValueKind::Bool(true))
+    );
+    match dep.last() {
+        Some(PathSegment::Key(k)) if inherited => Some(k.clone()),
+        _ => None,
+    }
+}
+
+/// Where an entry of `[workspace.dependencies]` comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceDependency {
+    /// Its `path`, relative to the root `Cargo.toml`.
+    pub path: Option<String>,
+    /// Its version requirement.
+    pub requirement: Option<String>,
+    /// Its `package` rename.
+    pub package: Option<String>,
+}
+
+/// The entry `key` of `[workspace.dependencies]` in the root `Cargo.toml`.
+pub fn cargo_workspace_dependency(root: &Document, key: &str) -> Option<WorkspaceDependency> {
+    let dep = [
+        PathSegment::Key("workspace".to_owned()),
+        PathSegment::Key("dependencies".to_owned()),
+        PathSegment::Key(key.to_owned()),
+    ];
+    root.dom.get(&dep)?;
+    Some(WorkspaceDependency {
+        path: string_at(root, &with(&dep, "path")),
+        requirement: requirement(root, &dep),
+        package: package_name(root, &dep),
+    })
+}
+
+impl CargoContext {
+    /// The context with another version requirement: the one of the
+    /// workspace for a `workspace = true` dependency.
+    pub fn with_requirement(mut self, req: Option<String>) -> CargoContext {
+        if let CargoTarget::Feature { requirement, .. } = &mut self.target {
+            *requirement = req;
+        }
+        self
+    }
+}
+
+/// The keys of a dependency table (`serde = { | }`, `[dependencies.serde]`),
+/// those already written excepted.
+pub fn cargo_dependency_key_completions(
+    doc: &Document,
+    offset: TextSize,
+    snippets: bool,
+) -> Vec<CompletionItem> {
+    let position = position_at(doc, offset);
+    let PositionKind::Key { range, header: false, .. } = position.kind else { return Vec::new() };
+    let path = &position.path;
+    let Some(table) = dependency_table(path) else { return Vec::new() };
+    if path.len() != table + 1 {
+        return Vec::new();
+    }
+    let existing: Vec<String> = match doc.dom.get(path) {
+        Some(Item::Table(t)) => t.entries().iter().map(|e| e.key.clone()).collect(),
+        _ => Vec::new(),
+    };
+    const KEYS: &[(&str, &str, &str)] = &[
+        ("version", "\"$1\"", "The version requirement."),
+        ("features", "[$1]", "The features to enable."),
+        ("default-features", "false", "`false`: without the `default` feature."),
+        ("optional", "true", "Enabled by a feature: `dep:name`."),
+        ("path", "\"$1\"", "A local crate."),
+        ("git", "\"$1\"", "A git repository."),
+        ("branch", "\"$1\"", "The branch of `git`."),
+        ("tag", "\"$1\"", "The tag of `git`."),
+        ("rev", "\"$1\"", "The commit of `git`."),
+        ("package", "\"$1\"", "The name of the crate, when the key renames it."),
+        ("workspace", "true", "From `[workspace.dependencies]`."),
+        ("registry", "\"$1\"", "Another registry than crates.io."),
+    ];
+    KEYS.iter()
+        .filter(|(k, ..)| !existing.iter().any(|e| e == k))
+        .enumerate()
+        .map(|(i, (k, value, documentation))| {
+            let (insert, snippet) = if snippets {
+                (format!("{k} = {value}"), true)
+            } else {
+                (format!("{k} = {}", value.replace("$1", "")), false)
+            };
+            CompletionItem {
+                label: (*k).to_owned(),
+                insert,
+                snippet,
+                range,
+                kind: CompletionKind::Key,
+                detail: None,
+                documentation: Some((*documentation).to_owned()),
+                sort: format!("0{i:05}"),
+                deprecated: false,
+                filter: Some((*k).to_owned()),
+            }
+        })
+        .collect()
 }
 
 fn string_at(doc: &Document, path: &[PathSegment]) -> Option<String> {

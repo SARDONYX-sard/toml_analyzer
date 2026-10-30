@@ -404,3 +404,152 @@ pub fn sort_keys_fix(doc: &Document, offset: TextSize, schema: crate::Schema<'_>
         preferred: false,
     })
 }
+
+/// The entry at `offset` when it is directly in a section (`[table]` or
+/// before the first header), not in an inline table.
+fn section_entry(doc: &Document, offset: TextSize) -> Option<SyntaxNode<'_>> {
+    let token = doc.root().token_at_offset(offset).left_biased()?;
+    // The outermost entry: inside `a = { b = 1 }`, the one of `a`.
+    token.ancestors().find(|n| {
+        n.kind() == SyntaxKind::ENTRY
+            && n.parent().is_some_and(|p| {
+                matches!(p.kind(), SyntaxKind::ROOT | SyntaxKind::TABLE | SyntaxKind::ARRAY_TABLE)
+            })
+    })
+}
+
+/// The key segments of an entry: their source text and decoded value.
+fn key_segments(entry: SyntaxNode<'_>) -> Vec<(String, String)> {
+    let Some(key) = entry.child_node(SyntaxKind::KEY) else { return Vec::new() };
+    key.child_tokens()
+        .filter(|t| !t.kind().is_trivia() && t.kind() != SyntaxKind::DOT)
+        .map(|t| (t.text().to_owned(), toml_parser::ast::decode(t).into_owned()))
+        .collect()
+}
+
+/// The source text of the value of an entry.
+fn value_text<'a>(doc: &'a Document, entry: SyntaxNode<'_>) -> Option<&'a str> {
+    use toml_parser::ast::AstNode;
+    let value = toml_parser::ast::Entry::cast(entry)?.value()?;
+    Some(&doc.text[value.text_range()])
+}
+
+/// A title showing `text`, when it is short.
+fn convert_title(text: &str, otherwise: &str) -> String {
+    if text.len() <= 60 && !text.contains('\n') {
+        format!("Convert to `{text}`")
+    } else {
+        otherwise.to_owned()
+    }
+}
+
+/// Rewrites the entry at `offset` between dotted keys and an inline table:
+///
+/// - `a.b = 1` (with the other `a.*` entries of the section) to
+///   `a = { b = 1 }`, when nothing else extends the table `a`;
+/// - `a = { b = 1, c = 2 }` to `a.b = 1` and `a.c = 2`.
+pub fn key_style_fixes(doc: &Document, offset: TextSize) -> Vec<Fix> {
+    let Some(entry) = section_entry(doc, offset) else { return Vec::new() };
+    let mut out = Vec::new();
+    out.extend(to_inline_table(doc, entry));
+    out.extend(to_dotted_keys(doc, entry));
+    out
+}
+
+fn to_inline_table(doc: &Document, entry: SyntaxNode<'_>) -> Option<Fix> {
+    let segments = key_segments(entry);
+    if segments.len() < 2 {
+        return None;
+    }
+    let prefix = &segments[..segments.len() - 1];
+    let container = entry.parent()?;
+    // The entries of the section under the same prefix, in order.
+    let siblings: Vec<SyntaxNode<'_>> = container
+        .children()
+        .filter(|n| n.kind() == SyntaxKind::ENTRY)
+        .filter(|n| {
+            let s = key_segments(*n);
+            s.len() > prefix.len() && s[..prefix.len()].iter().zip(prefix).all(|(a, b)| a.1 == b.1)
+        })
+        .collect();
+    // An inline table holds one line; TOML 1.0 has no newlines there.
+    if siblings.iter().any(|n| doc.text[n.text_range()].contains('\n')) {
+        return None;
+    }
+    // Nothing else may extend the table: no header below it.
+    let section: Path = match container.kind() {
+        SyntaxKind::ROOT => Path::new(),
+        _ => doc.dom.table_path(container.text_range().start())?.clone(),
+    };
+    let mut table_path = section.clone();
+    table_path.extend(prefix.iter().map(|(_, v)| toml_dom::PathSegment::Key(v.clone())));
+    match doc.dom.get(&table_path) {
+        Some(Item::Table(t)) if t.kind == TableKind::Dotted => {}
+        _ => return None,
+    }
+    if doc
+        .dom
+        .table_paths
+        .iter()
+        .any(|(_, p)| p.len() > table_path.len() && p.starts_with(&table_path))
+    {
+        return None;
+    }
+    let inner: Vec<String> = siblings
+        .iter()
+        .map(|n| {
+            let s = key_segments(*n);
+            let rest: Vec<&str> = s[prefix.len()..].iter().map(|(raw, _)| raw.as_str()).collect();
+            Some(format!("{} = {}", rest.join("."), value_text(doc, *n)?))
+        })
+        .collect::<Option<_>>()?;
+    let key: Vec<&str> = prefix.iter().map(|(raw, _)| raw.as_str()).collect();
+    let text = format!("{} = {{ {} }}", key.join("."), inner.join(", "));
+    let first = siblings.first()?;
+    let mut edits = vec![(first.text_range(), text.clone())];
+    for other in &siblings[1..] {
+        edits.push((line_removal(doc, other.text_range()), String::new()));
+    }
+    Some(Fix { title: convert_title(&text, "Convert to an inline table"), edits, preferred: false })
+}
+
+fn to_dotted_keys(doc: &Document, entry: SyntaxNode<'_>) -> Option<Fix> {
+    use toml_parser::ast::AstNode;
+    let toml_parser::ast::Value::InlineTable(inline) =
+        toml_parser::ast::Entry::cast(entry)?.value()?
+    else {
+        return None;
+    };
+    // Comments in the table would be lost.
+    if inline.syntax().descendant_tokens().any(|t| t.kind() == SyntaxKind::COMMENT) {
+        return None;
+    }
+    let key = entry.child_node(SyntaxKind::KEY)?;
+    let key_text = doc.text[key.text_range()].trim();
+    let lines: Vec<String> = inline
+        .entries()
+        .map(|e| {
+            let k = e.key()?;
+            Some(format!(
+                "{key_text}.{} = {}",
+                doc.text[k.syntax().text_range()].trim(),
+                value_text(doc, e.syntax())?
+            ))
+        })
+        .collect::<Option<_>>()?;
+    if lines.is_empty() {
+        return None;
+    }
+    // The indentation of the entry for the next lines.
+    let start = usize::from(entry.text_range().start());
+    let line_start = doc.text[..start].rfind('\n').map_or(0, |i| i + 1);
+    let indent = &doc.text[line_start..start];
+    let indent = if indent.trim().is_empty() { indent } else { "" };
+    let text = lines.join(&format!("\n{indent}"));
+    let title = if lines.len() == 1 {
+        convert_title(&text, "Convert to dotted keys")
+    } else {
+        "Convert to dotted keys".to_owned()
+    };
+    Some(Fix { title, edits: vec![(entry.text_range(), text)], preferred: false })
+}

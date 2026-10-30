@@ -100,6 +100,13 @@ impl Server {
         } else {
             None
         };
+        // `dep = { workspace = true, ... }`: as the root `Cargo.toml` says.
+        let context = match context {
+            Some(c) if c.workspace_key.is_some() && c.local_path.is_none() => {
+                Some(self.resolve_workspace_dependency(uri, c))
+            }
+            other => other,
+        };
         let answer = match &context {
             Some(c) if c.local_path.is_some() => Some(self.local_crate_answer(uri, c)),
             Some(c) => Some(self.crates.get(&c.query)?),
@@ -133,10 +140,21 @@ impl Server {
         if cargo {
             items.extend(toml_ide::cargo_feature_completions(doc, offset));
         }
+        // The keys of a dependency: they win over the same keys of the schema.
+        let keys = if cargo {
+            toml_ide::cargo_dependency_key_completions(doc, offset, snippets)
+        } else {
+            Vec::new()
+        };
         if let Some(url) = &url {
             let schema = Schema { registry: &self.schemas.registry, url };
-            items.extend(toml_ide::completions(doc, offset, schema, snippets));
+            items.extend(
+                toml_ide::completions(doc, offset, schema, snippets)
+                    .into_iter()
+                    .filter(|i| !keys.iter().any(|k| k.label == i.label)),
+            );
         }
+        items.extend(keys);
         let items: Vec<CompletionItem> =
             items.into_iter().map(|i| completion_item(doc, i)).collect();
         // Crate names: the registry is searched again as the name grows.
@@ -451,6 +469,7 @@ impl Server {
             extra.extend(toml_ide::sort_keys_fix(&doc.doc, range.start(), schema));
         }
         extra.extend(toml_ide::sort_alphabetically_fix(&doc.doc, range.start()));
+        extra.extend(toml_ide::key_style_fixes(&doc.doc, range.start()));
         if cargo && is_cargo_manifest(doc) {
             let locals = doc
                 .path
@@ -520,6 +539,36 @@ impl Server {
         Answer::Versions(
             found.filter(|v| !v.version.is_empty() || !v.features.is_empty()).into_iter().collect(),
         )
+    }
+
+    /// A `workspace = true` dependency, as `[workspace.dependencies]` of the
+    /// root `Cargo.toml` defines it: a local crate, or a registry crate with
+    /// the requirement of the workspace.
+    fn resolve_workspace_dependency(
+        &self,
+        uri: &Uri,
+        context: toml_ide::CargoContext,
+    ) -> toml_ide::CargoContext {
+        let resolved = (|| {
+            let key = context.workspace_key.as_deref()?;
+            let dir = self.doc(uri).ok()?.path.as_deref()?.parent()?.to_owned();
+            let (root_path, root) = self.workspace_root_at(&dir)?;
+            let dep = toml_ide::cargo_workspace_dependency(&root, key)?;
+            Some((root_path, dep))
+        })();
+        let Some((root_path, dep)) = resolved else { return context };
+        let mut context = context;
+        if let Some(path) = &dep.path
+            && let Some(root_dir) = root_path.parent()
+        {
+            // Absolute: `local_crate_answer` joins it to nothing.
+            context.local_path = Some(root_dir.join(path).to_string_lossy().into_owned());
+            return context;
+        }
+        if let Some(package) = dep.package {
+            context.query = toml_ide::CargoQuery::Versions(package);
+        }
+        context.with_requirement(dep.requirement)
     }
 
     /// The `Cargo.toml` with a `[workspace]` in `dir` or above, and its path.
